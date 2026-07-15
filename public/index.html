@@ -297,7 +297,7 @@
                     
                     const pt = this._map.latLngToContainerPoint([strike.lat, strike.lon]);
                     
-                    if (showVectors) visiblePoints.push({ x: pt.x, y: pt.y, age: age, timestamp: strike.timestamp });
+                    if (showVectors) visiblePoints.push({ x: pt.x, y: pt.y, lat: strike.lat, lon: strike.lon, age: age, timestamp: strike.timestamp });
 
                     const ratio = age / this.displayAgeMs;
                     const g = Math.round(255 * (1 - ratio));
@@ -328,20 +328,27 @@
                 // PASS 2: Draw Storm Vectors ON TOP
                 if (showVectors && visiblePoints.length > 0) {
                     const clusters = [];
-                    const CLUSTER_DIST_SQ = 55 * 55; // Tighter core grouping
+                    // Anchor clustering geographically (~35-40km radius) so it survives zooming
+                    const CLUSTER_DEG_SQ = 0.35 * 0.35; 
                     
                     visiblePoints.forEach(p => {
                         let found = false;
                         for (let c of clusters) {
-                            if ((p.x - c.cx)**2 + (p.y - c.cy)**2 < CLUSTER_DIST_SQ) {
+                            const dLat = p.lat - c.clat;
+                            // Approximate longitude scaling based on latitude to prevent distortion
+                            const dLon = (p.lon - c.clon) * Math.cos(c.clat * Math.PI / 180);
+                            if (dLat*dLat + dLon*dLon < CLUSTER_DEG_SQ) {
                                 c.pts.push(p);
+                                c.clat = (c.clat * (c.pts.length - 1) + p.lat) / c.pts.length;
+                                c.clon = (c.clon * (c.pts.length - 1) + p.lon) / c.pts.length;
+                                // Keep updating screen coordinates for rendering
                                 c.cx = (c.cx * (c.pts.length - 1) + p.x) / c.pts.length;
                                 c.cy = (c.cy * (c.pts.length - 1) + p.y) / c.pts.length;
                                 found = true;
                                 break;
                             }
                         }
-                        if (!found) clusters.push({ cx: p.x, cy: p.y, pts: [p] });
+                        if (!found) clusters.push({ cx: p.x, cy: p.y, clat: p.lat, clon: p.lon, pts: [p] });
                     });
 
                     clusters.forEach(c => {
@@ -382,8 +389,8 @@
                             const dy = ny - oy;
                             const pixelDist = Math.sqrt(dx*dx + dy*dy);
                             
-                            // Only draw if distinct movement and not an anomaly
-                            if (pixelDist > 3 && speedMPS < 150) {
+                            // Strict real-world filter: Only draw if distinct movement (>2km) and realistic speed (2 to 50 m/s)
+                            if (distanceMeters > 2000 && speedMPS > 2 && speedMPS < 50) {
                                 const angle = Math.atan2(dy, dx);
                                 const heading = getCompassHeading(angle);
                                 const label = `${heading} @ ${speedMPS.toFixed(1)} m/s`;
