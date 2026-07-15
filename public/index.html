@@ -1,164 +1,357 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Weather Dashboard</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>weerweather</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body, html { margin: 0; padding: 0; height: 100%; background: #000; font-family: sans-serif; }
+        :root {
+            --bg-panel: #121214;
+            --border-color: #27272a;
+            --text-main: #f4f4f5;
+            --text-mute: #71717a;
+            --control-bg: #1e1e2f;
+        }
+
+        body, html { margin: 0; padding: 0; height: 100%; background: #09090b; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow: hidden; }
         #map { height: 100vh; width: 100vw; }
-        .leaflet-container { background: #111; }
+        .leaflet-container { background: #09090b; }
         
-        /* Lightning strike animation */
-        .lightning-strike {
-            background-color: #fff;
-            border-radius: 50%;
-            box-shadow: 0 0 8px #fce803, 0 0 15px #fce803;
-            transition: opacity 1.5s ease-out;
-        }
-
-        /* Control Panels */
-        .panel {
-            position: absolute;
-            z-index: 1000;
-            background: rgba(20, 20, 20, 0.85);
-            border-radius: 12px;
-            border: 1px solid #333;
-            color: #fff;
-            backdrop-filter: blur(5px);
-            padding: 15px;
-        }
-
-        /* Time Slider UI */
-        #timeline-ui {
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
+        /* Crisp lightning '×' icon */
+        .strike-x-icon {
+            font-family: inherit;
+            font-weight: bold;
+            font-size: 14px;
+            line-height: 1;
             display: flex;
             align-items: center;
-            gap: 15px;
-            width: 300px;
+            justify-content: center;
+            pointer-events: none;
+            color: #ffffff;
+            transition: color 0.5s ease;
         }
 
-        #timestamp { font-size: 14px; font-weight: bold; min-width: 50px; text-align: center; }
-        #time-slider { flex-grow: 1; cursor: pointer; accent-color: #fce803; }
+        /* Clean Monospace Utility Panel */
+        #control-panel {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            width: 240px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-main);
+            z-index: 1000;
+            font-size: 11px;
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
+        }
 
-        /* Layer Toggles */
-        #layer-ui {
-            top: 20px;
-            right: 20px;
+        .panel-section {
+            padding: 12px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .panel-section:last-child {
+            border-bottom: none;
+        }
+
+        .section-header {
+            color: var(--text-mute);
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            font-weight: bold;
+            font-size: 9px;
+            letter-spacing: 0.05em;
+        }
+
+        .control-row {
             display: flex;
-            flex-direction: column;
-            gap: 12px;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+        .control-row:last-child {
+            margin-bottom: 0;
         }
 
-        .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; font-size: 14px; font-weight: bold;}
-        
-        /* Custom Checkbox */
-        input[type="checkbox"] {
-            appearance: none; width: 40px; height: 20px; background: #444; border-radius: 20px; position: relative; cursor: pointer; outline: none;
+        .slider-label {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 6px;
         }
-        input[type="checkbox"]::after {
-            content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: 0.2s;
+
+        /* Flat, Sharp Checkbox Switches */
+        .switch {
+            position: relative;
+            display: inline-block;
+            width: 32px;
+            height: 16px;
         }
-        input[type="checkbox"]:checked { background: #fce803; }
-        input[type="checkbox"]:checked::after { left: 22px; background: #000; }
-        
-        .disabled-text { color: #666; text-decoration: line-through; }
+        .switch input { opacity: 0; width: 0; height: 0; }
+        .slider {
+            position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+            background-color: #27272a; transition: 0.1s; border-radius: 2px;
+            border: 1px solid var(--border-color);
+        }
+        .slider:before {
+            position: absolute; content: ""; height: 10px; width: 10px; left: 2px; bottom: 2px;
+            background-color: var(--text-mute); transition: 0.1s; border-radius: 1px;
+        }
+        input:checked + .slider { background-color: var(--text-main); border-color: var(--text-main); }
+        input:checked + .slider:before { transform: translateX(16px); background-color: var(--bg-panel); }
+
+        /* Utilitarian Range Sliders */
+        input[type="range"] {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 2px;
+            background: #27272a;
+            outline: none;
+            margin: 8px 0;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 8px;
+            height: 10px;
+            background: var(--text-main);
+            cursor: pointer;
+            border-radius: 1px;
+        }
+
+        /* Tactile Text Play Button */
+        #play-btn {
+            background: #18181b;
+            border: 1px solid var(--border-color);
+            color: var(--text-main);
+            padding: 2px 6px;
+            border-radius: 2px;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 9px;
+            text-transform: uppercase;
+        }
+        #play-btn:hover {
+            background: #27272a;
+        }
+        #play-btn:active {
+            background: #09090b;
+        }
     </style>
 </head>
 <body>
     <div id="map"></div>
-    
-    <!-- Layer Toggles -->
-    <div id="layer-ui" class="panel">
-        <div class="toggle-row">
-            <span>Rain Radar</span>
-            <input type="checkbox" id="toggle-radar" checked>
-        </div>
-        <div class="toggle-row">
-            <span>Lightning</span>
-            <input type="checkbox" id="toggle-lightning" checked>
-        </div>
-        <div class="toggle-row">
-            <span class="disabled-text" title="API Support Discontinued in 2026">Clouds (IR)</span>
-            <input type="checkbox" disabled>
-        </div>
-    </div>
 
-    <!-- Timeline Slider -->
-    <div id="timeline-ui" class="panel">
-        <div id="timestamp">--:--</div>
-        <input type="range" id="time-slider" min="0" max="0" value="0" step="1" disabled>
+    <!-- Minimalist Sidebar Dashboard -->
+    <div id="control-panel">
+        <!-- Section 1: Overlays -->
+        <div class="panel-section">
+            <div class="section-header">Layers</div>
+            <div class="control-row">
+                <span>Rain Radar</span>
+                <label class="switch">
+                    <input type="checkbox" id="layer-radar" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+            <div class="control-row">
+                <span>Lightning</span>
+                <label class="switch">
+                    <input type="checkbox" id="layer-lightning" checked>
+                    <span class="slider"></span>
+                </label>
+            </div>
+        </div>
+
+        <!-- Section 2: Lightning Aging -->
+        <div class="panel-section">
+            <div class="section-header">Lightning History</div>
+            <div class="slider-label">
+                <span>Max Age</span>
+                <span id="lightning-age-val" style="font-weight: bold;">15m</span>
+            </div>
+            <input type="range" id="lightning-age-slider" min="1" max="15" value="15">
+        </div>
+
+        <!-- Section 3: Radar Timeline -->
+        <div class="panel-section">
+            <div class="section-header">Radar Timeline</div>
+            <div class="slider-label">
+                <span id="radar-timestamp" style="font-weight: bold;">--:--</span>
+                <button id="play-btn" disabled>Play</button>
+            </div>
+            <input type="range" id="radar-timeline" min="0" max="0" value="0" step="1" disabled>
+        </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
+        // Setup Map
         const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-        // Map Layers
+        // Core Layers
         const radarLayer = L.tileLayer('', { opacity: 0.65, maxNativeZoom: 7, transparent: true }).addTo(map);
         const lightningLayer = L.layerGroup().addTo(map);
 
+        // State Engines
         let radarFrames = [];
+        let lightningStrikes = []; 
+        let maxAgeMs = 15 * 60 * 1000; 
+        let displayAgeMs = 15 * 60 * 1000; 
 
-        async function loadRadar() {
+        // --- 1. Lightning Custom Gradient Logic ---
+        const lightningAgeSlider = document.getElementById('lightning-age-slider');
+        const lightningAgeVal = document.getElementById('lightning-age-val');
+
+        lightningAgeSlider.addEventListener('input', (e) => {
+            const min = parseInt(e.target.value);
+            lightningAgeVal.innerText = `${min}m`;
+            displayAgeMs = min * 60 * 1000;
+            renderStrikeColors();
+        });
+
+        function renderStrikeColors() {
+            const now = Date.now();
+            lightningStrikes.forEach(strike => {
+                const age = now - strike.timestamp;
+                const element = strike.marker.getElement();
+
+                if (!element) return;
+
+                if (age > displayAgeMs) {
+                    element.style.display = 'none';
+                } else {
+                    element.style.display = 'flex';
+                    const ratio = age / displayAgeMs; 
+
+                    // Interpolating White (255, 255, 255) to Flat Red (255, 0, 0)
+                    const g = Math.round(255 * (1 - ratio));
+                    const b = Math.round(255 * (1 - ratio));
+                    
+                    element.style.color = `rgb(255, ${g}, ${b})`;
+                }
+            });
+        }
+
+        // Keep local cache clear of items past hard 15m limit (Every 1 second)
+        setInterval(() => {
+            const now = Date.now();
+            for (let i = lightningStrikes.length - 1; i >= 0; i--) {
+                const strike = lightningStrikes[i];
+                if (now - strike.timestamp > maxAgeMs) {
+                    lightningLayer.removeLayer(strike.marker);
+                    lightningStrikes.splice(i, 1);
+                }
+            }
+            renderStrikeColors();
+        }, 1000);
+
+        // --- 2. Live Websocket Setup ---
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = window.location.port === '5500' ? 'localhost:3000' : window.location.host;
+        const ws = new WebSocket(`${protocol}//${wsHost}`);
+
+        ws.onmessage = (event) => {
+            const strike = JSON.parse(event.data);
+            
+            const markerIcon = L.divIcon({
+                className: 'strike-x-icon',
+                html: '×',
+                iconSize: [12, 12],
+                iconAnchor: [6, 6]
+            });
+
+            const leafletMarker = L.marker([strike.lat, strike.lon], { icon: markerIcon });
+
+            if (map.hasLayer(lightningLayer)) {
+                leafletMarker.addTo(lightningLayer);
+            }
+
+            lightningStrikes.push({
+                marker: leafletMarker,
+                timestamp: Date.now()
+            });
+
+            renderStrikeColors();
+        };
+
+        // --- 3. Radar Timeline Controller ---
+        const radarTimeline = document.getElementById('radar-timeline');
+        const radarTimestamp = document.getElementById('radar-timestamp');
+        const playBtn = document.getElementById('play-btn');
+
+        let isPlaying = false;
+        let playInterval = null;
+
+        async function initRadar() {
             try {
                 const res = await fetch('https://api.rainviewer.com/public/weather-maps.json');
                 const data = await res.json();
                 
                 radarFrames = data.radar.past;
-                const slider = document.getElementById('time-slider');
-                slider.max = radarFrames.length - 1;
-                slider.value = radarFrames.length - 1;
-                slider.disabled = false;
+                
+                radarTimeline.max = radarFrames.length - 1;
+                radarTimeline.value = radarFrames.length - 1;
+                radarTimeline.disabled = false;
+                playBtn.disabled = false;
 
-                function updateRadarFrame(index) {
+                function setRadarFrame(index) {
                     const frame = radarFrames[index];
-                    // Using 512px tiles to avoid the strict 100 req/minute rate limit
                     radarLayer.setUrl(`https://tilecache.rainviewer.com${frame.path}/512/{z}/{x}/{y}/2/1_1.png`);
                     
                     const date = new Date(frame.time * 1000);
-                    // Forced 24-hour mode
-                    document.getElementById('timestamp').innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+                    radarTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
                 }
 
-                slider.addEventListener('input', (e) => updateRadarFrame(e.target.value));
-                updateRadarFrame(radarFrames.length - 1);
+                radarTimeline.addEventListener('input', (e) => {
+                    if (isPlaying) stopLoop();
+                    setRadarFrame(e.target.value);
+                });
+
+                function runLoop() {
+                    isPlaying = true;
+                    playBtn.innerText = 'Pause';
+                    playInterval = setInterval(() => {
+                        let current = parseInt(radarTimeline.value);
+                        let next = current + 1;
+                        if (next >= radarFrames.length) next = 0;
+                        radarTimeline.value = next;
+                        setRadarFrame(next);
+                    }, 1000);
+                }
+
+                function stopLoop() {
+                    isPlaying = false;
+                    playBtn.innerText = 'Play';
+                    clearInterval(playInterval);
+                }
+
+                playBtn.addEventListener('click', () => {
+                    isPlaying ? stopLoop() : runLoop();
+                });
+
+                setRadarFrame(radarFrames.length - 1);
 
             } catch (err) {
                 console.error("Radar error:", err);
+                radarTimestamp.innerText = "Error";
             }
         }
-        loadRadar();
+        initRadar();
 
-        // UI Toggle Logic
-        document.getElementById('toggle-radar').addEventListener('change', (e) => {
+        // --- 4. Layer Visibility ---
+        document.getElementById('layer-radar').addEventListener('change', (e) => {
             e.target.checked ? map.addLayer(radarLayer) : map.removeLayer(radarLayer);
         });
         
-        document.getElementById('toggle-lightning').addEventListener('change', (e) => {
-            e.target.checked ? map.addLayer(lightningLayer) : map.removeLayer(lightningLayer);
-        });
-
-        // Lightning Websocket Logic
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        const wsHost = window.location.port === '5500' ? 'localhost:3000' : window.location.host;
-        const ws = new WebSocket(`${protocol}//${wsHost}`);
-        
-        ws.onmessage = (event) => {
-            const strike = JSON.parse(event.data);
-            const marker = L.divIcon({ className: 'lightning-strike', iconSize: [6, 6] });
-            const leafletMarker = L.marker([strike.lat, strike.lon], { icon: marker });
-            
-            if (map.hasLayer(lightningLayer)) {
-                leafletMarker.addTo(lightningLayer);
-                setTimeout(() => {
-                    if (leafletMarker.getElement()) leafletMarker.getElement().style.opacity = '0';
-                    setTimeout(() => lightningLayer.removeLayer(leafletMarker), 1500);
-                }, 100);
+        document.getElementById('layer-lightning').addEventListener('change', (e) => {
+            if (e.target.checked) {
+                map.addLayer(lightningLayer);
+                renderStrikeColors();
+            } else {
+                map.removeLayer(lightningLayer);
             }
-        };
+        });
     </script>
 </body>
 </html>
