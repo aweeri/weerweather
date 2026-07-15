@@ -10,20 +10,20 @@ const wss = new WebSocket.Server({ server });
 
 // --- 1. Lightning Core & History Cache ---
 let strikeCache = [];
-const MAX_STRIKE_AGE_MS = 15 * 60 * 1000; // 15 minutes in milliseconds
+// Increased backend cache to 30 minutes
+const MAX_STRIKE_AGE_MS = 30 * 60 * 1000; 
 
 function addStrikeToCache(lat, lon) {
     const now = Date.now();
     strikeCache.push({ lat, lon, timestamp: now });
-    // Keep cache strictly pruned to the last 15 minutes
     strikeCache = strikeCache.filter(s => now - s.timestamp <= MAX_STRIKE_AGE_MS);
 }
 
 // --- 2. RainViewer Reverse Proxy & Memory Cache ---
 let metadataCache = null;
 let metadataTimestamp = 0;
-const METADATA_TTL = 2 * 60 * 1000; // Cache metadata for 2 minutes
-const tileCache = new Map(); // Key: tilePath, Value: { buffer, contentType }
+const METADATA_TTL = 2 * 60 * 1000;
+const tileCache = new Map();
 
 async function getMetadata() {
     const now = Date.now();
@@ -32,12 +32,10 @@ async function getMetadata() {
             const response = await fetch('https://api.rainviewer.com/public/weather-maps.json');
             metadataCache = await response.json();
             metadataTimestamp = now;
-            
-            // Clear expired tiles from RAM that fell out of the active 2-hour window
             garbageCollectTiles(metadataCache);
         } catch (err) {
             console.error('[Radar Cache] Error fetching metadata:', err.message);
-            if (!metadataCache) throw err; // Fallback to old cache if network is temporarily down
+            if (!metadataCache) throw err;
         }
     }
     return metadataCache;
@@ -62,7 +60,6 @@ function garbageCollectTiles(newMetadata) {
     }
 }
 
-// REST Endpoints
 app.get('/api/radar/metadata', async (req, res) => {
     try {
         const data = await getMetadata();
@@ -73,28 +70,24 @@ app.get('/api/radar/metadata', async (req, res) => {
 });
 
 app.get('/api/radar/tile/*', async (req, res) => {
-    const tilePath = '/' + req.params[0]; // Format: /v2/radar/...
+    const tilePath = '/' + req.params[0];
     
-    // Serve from RAM if cached
     if (tileCache.has(tilePath)) {
         const cached = tileCache.get(tilePath);
         res.set('Content-Type', cached.contentType);
         return res.send(cached.buffer);
     }
 
-    // Otherwise, fetch, store, and serve
     const targetUrl = `https://tilecache.rainviewer.com${tilePath}`;
     try {
         const response = await fetch(targetUrl);
-        if (!response.ok) {
-            return res.status(response.status).end();
-        }
+        if (!response.ok) return res.status(response.status).end();
+        
         const contentType = response.headers.get('content-type') || 'image/png';
         const arrayBuffer = await response.arrayBuffer();
         const buffer = Buffer.from(arrayBuffer);
 
         tileCache.set(tilePath, { buffer, contentType });
-
         res.set('Content-Type', contentType);
         res.send(buffer);
     } catch (err) {
@@ -103,7 +96,6 @@ app.get('/api/radar/tile/*', async (req, res) => {
 });
 
 // --- 3. WebSocket Broker ---
-// Reverse-engineered Blitzortung LZW Decompressor
 function decodeBlitzortung(b) {
     let a, e = {}, d = b.split(""), c = d[0], f = c, g = [c], h = 256, o = h;
     for (let i = 1; i < d.length; i++) {
@@ -135,33 +127,23 @@ function connectToBlitzortung() {
                 const now = Date.now();
                 addStrikeToCache(strike.lat, strike.lon);
                 
-                // Broadcast live strike coordinates to active clients
                 const payload = JSON.stringify({ type: 'strike', lat: strike.lat, lon: strike.lon, timestamp: now });
                 wss.clients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) {
-                        client.send(payload);
-                    }
+                    if (client.readyState === WebSocket.OPEN) client.send(payload);
                 });
             }
         } catch (err) {}
     });
 
-    wsBlitz.on('close', () => {
-        setTimeout(connectToBlitzortung, 5000);
-    });
-
-    wsBlitz.on('error', () => {
-        wsBlitz.close();
-    });
+    wsBlitz.on('close', () => setTimeout(connectToBlitzortung, 5000));
+    wsBlitz.on('error', () => wsBlitz.close());
 }
 connectToBlitzortung();
 
-// Push historical strikes instantly to newly connected clients
 wss.on('connection', (ws) => {
     ws.send(JSON.stringify({ type: 'history', data: strikeCache }));
 });
 
-// Print status to Dockge console
 setInterval(() => {
     console.log(`[Status] Active memory cache: ${tileCache.size} map tiles. Retained historical strikes: ${strikeCache.length}`);
 }, 60000);

@@ -18,6 +18,21 @@
         #map { height: 100vh; width: 100vw; }
         .leaflet-container { background: #09090b; }
         
+        /* AweerWeather Logo */
+        #logo {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            z-index: 1000;
+            color: var(--text-main);
+            font-size: 14px;
+            font-weight: bold;
+            pointer-events: none;
+            user-select: none;
+            letter-spacing: 0.05em;
+        }
+        #logo .ghost { opacity: 0.15; }
+
         #control-panel {
             position: absolute;
             top: 16px;
@@ -31,6 +46,19 @@
             font-size: 11px;
             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
         }
+
+        /* Panel Collapse Tab */
+        #panel-tab {
+            padding: 6px 12px;
+            text-align: right;
+            border-bottom: 1px solid var(--border-color);
+            cursor: pointer;
+            color: var(--text-mute);
+            user-select: none;
+        }
+        #panel-tab:hover { color: var(--text-main); }
+        .collapsed #panel-body { display: none; }
+        .collapsed #panel-tab { border-bottom: none; }
 
         .panel-section {
             padding: 12px;
@@ -98,51 +126,72 @@
     </style>
 </head>
 <body>
+    <div id="logo"><span class="ghost">A</span>weerWeather</div>
     <div id="map"></div>
 
     <div id="control-panel">
-        <div class="panel-section">
-            <div class="section-header">Overlays & Audio</div>
-            <div class="control-row">
-                <span>Rain Radar</span>
-                <label class="switch">
-                    <input type="checkbox" id="layer-radar" checked>
-                    <span class="slider"></span>
-                </label>
+        <div id="panel-tab">[ – ] HIDE</div>
+        
+        <div id="panel-body">
+            <div class="panel-section">
+                <div class="section-header">Overlays & Audio</div>
+                <div class="control-row">
+                    <span>Rain Radar</span>
+                    <label class="switch">
+                        <input type="checkbox" id="layer-radar" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="control-row">
+                    <span>Lightning Map</span>
+                    <label class="switch">
+                        <input type="checkbox" id="layer-lightning" checked>
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="control-row">
+                    <span>Storm Vectors</span>
+                    <label class="switch">
+                        <input type="checkbox" id="layer-vectors">
+                        <span class="slider"></span>
+                    </label>
+                </div>
+                <div class="control-row">
+                    <span>Audio Ticks</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggle-sound">
+                        <span class="slider"></span>
+                    </label>
+                </div>
             </div>
-            <div class="control-row">
-                <span>Lightning</span>
-                <label class="switch">
-                    <input type="checkbox" id="layer-lightning" checked>
-                    <span class="slider"></span>
-                </label>
-            </div>
-            <div class="control-row">
-                <span>Audio Ticks</span>
-                <label class="switch">
-                    <!-- Default off to comply with browser autoplay policies -->
-                    <input type="checkbox" id="toggle-sound">
-                    <span class="slider"></span>
-                </label>
-            </div>
-        </div>
 
-        <div class="panel-section">
-            <div class="section-header">Lightning History</div>
-            <div class="slider-label">
-                <span>Max Age</span>
-                <span id="lightning-age-val" style="font-weight: bold;">1m</span>
+            <div class="panel-section">
+                <div class="section-header">Lightning History</div>
+                <div class="slider-label">
+                    <span>Max Age</span>
+                    <span id="lightning-age-val" style="font-weight: bold;">10m</span>
+                </div>
+                <!-- 30m max, default 10m -->
+                <input type="range" id="lightning-age-slider" min="1" max="30" value="10">
             </div>
-            <input type="range" id="lightning-age-slider" min="1" max="15" value="1">
-        </div>
 
-        <div class="panel-section">
-            <div class="section-header">Radar Timeline</div>
-            <div class="slider-label">
-                <span id="radar-timestamp" style="font-weight: bold;">--:--</span>
-                <button id="play-btn" disabled>Play</button>
+            <div class="panel-section">
+                <div class="section-header">Radar Timeline</div>
+                <div class="slider-label">
+                    <span id="radar-timestamp" style="font-weight: bold;">--:--</span>
+                    <button id="play-btn" disabled>Play</button>
+                </div>
+                <input type="range" id="radar-timeline" min="0" max="0" value="0" step="1" disabled>
             </div>
-            <input type="range" id="radar-timeline" min="0" max="0" value="0" step="1" disabled>
+
+            <div class="panel-section">
+                <div class="section-header">Data Sources</div>
+                <div style="color: var(--text-mute); line-height: 1.4; font-size: 9px;">
+                    STRIKES: BLITZORTUNG.ORG<br>
+                    RADAR: RAINVIEWER API<br>
+                    MAP: © OPENSTREETMAP / CARTO
+                </div>
+            </div>
         </div>
     </div>
 
@@ -151,35 +200,34 @@
         const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
+        // Panel Collapser
+        document.getElementById('panel-tab').addEventListener('click', (e) => {
+            const panel = document.getElementById('control-panel');
+            panel.classList.toggle('collapsed');
+            e.target.innerText = panel.classList.contains('collapsed') ? '[ + ] SHOW' : '[ – ] HIDE';
+        });
+
         // --- 0. Audio Synthesizer Engine ---
         let audioCtx = null;
         let isSoundEnabled = false;
 
         document.getElementById('toggle-sound').addEventListener('change', (e) => {
             isSoundEnabled = e.target.checked;
-            // Browsers require user interaction before granting audio context
-            if (isSoundEnabled && !audioCtx) {
-                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            }
-            if (isSoundEnabled && audioCtx.state === 'suspended') {
-                audioCtx.resume();
-            }
+            if (isSoundEnabled && !audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (isSoundEnabled && audioCtx.state === 'suspended') audioCtx.resume();
         });
 
         function playStrikeSound() {
             if (!isSoundEnabled || !audioCtx) return;
-            
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
             osc.connect(gain);
             gain.connect(audioCtx.destination);
             
-            // Fast frequency drop creates a crisp "tick/click" sound
             osc.type = 'sine';
             osc.frequency.setValueAtTime(1200, audioCtx.currentTime);
             osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.04);
             
-            // Rapid fade out
             gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
             gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.04);
             
@@ -187,11 +235,11 @@
             osc.stop(audioCtx.currentTime + 0.05);
         }
 
-        // --- 1. Pure Canvas Lightning Engine ---
+        // --- 1. Pure Canvas Lightning & Vector Engine ---
         const LightningCanvasLayer = L.Layer.extend({
             initialize: function() {
                 this.strikes = [];
-                this.displayAgeMs = 1 * 60 * 1000;
+                this.displayAgeMs = 10 * 60 * 1000; // 10 minute default
             },
             onAdd: function(map) {
                 this._map = map;
@@ -236,6 +284,9 @@
                 const west = bounds.getWest();
                 const east = bounds.getEast();
                 
+                const showVectors = document.getElementById('layer-vectors').checked;
+                const visiblePoints = []; // Used for clustering analysis
+                
                 for (let i = 0; i < this.strikes.length; i++) {
                     const strike = this.strikes[i];
                     const age = now - strike.timestamp;
@@ -244,28 +295,29 @@
                     if (strike.lat < south || strike.lat > north || strike.lon < west || strike.lon > east) continue;
                     
                     const pt = this._map.latLngToContainerPoint([strike.lat, strike.lon]);
+                    
+                    if (showVectors) {
+                        visiblePoints.push({ x: pt.x, y: pt.y, age: age });
+                    }
+
                     const ratio = age / this.displayAgeMs;
                     const g = Math.round(255 * (1 - ratio));
                     const b = Math.round(255 * (1 - ratio));
                     
-                    // A. Draw the permanent small marker
                     ctx.font = 'bold 12px ui-monospace, monospace';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
                     ctx.fillStyle = `rgb(255, ${g}, ${b})`;
                     ctx.fillText('×', pt.x, pt.y);
 
-                    // B. Draw the shrinking, razor-thin impact marker (Lives for 600ms)
                     if (age < 600) {
                         const animProgress = age / 600;
-                        const radius = 40 * (1 - animProgress); // Shrinks from 40px down to 0
-                        const alpha = 1 - Math.pow(animProgress, 2); // Fades out completely
+                        const radius = 40 * (1 - animProgress);
+                        const alpha = 1 - Math.pow(animProgress, 2);
 
                         ctx.beginPath();
                         ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
-                        ctx.lineWidth = 0.5; // Razor thin physical lines
-                        
-                        // Draw an X manually
+                        ctx.lineWidth = 0.5;
                         ctx.moveTo(pt.x - radius, pt.y - radius);
                         ctx.lineTo(pt.x + radius, pt.y + radius);
                         ctx.moveTo(pt.x + radius, pt.y - radius);
@@ -273,14 +325,99 @@
                         ctx.stroke();
                     }
                 }
+
+                // Dynamic Storm Vector Clustering
+                if (showVectors && visiblePoints.length > 0) {
+                    const clusters = [];
+                    const CLUSTER_DIST_SQ = 90 * 90; // Pixel proximity threshold
+                    
+                    // Group nearby strikes
+                    visiblePoints.forEach(p => {
+                        let found = false;
+                        for (let c of clusters) {
+                            const dSq = (p.x - c.cx)**2 + (p.y - c.cy)**2;
+                            if (dSq < CLUSTER_DIST_SQ) {
+                                c.pts.push(p);
+                                // Shift centroid dynamically
+                                c.cx = (c.cx * (c.pts.length - 1) + p.x) / c.pts.length;
+                                c.cy = (c.cy * (c.pts.length - 1) + p.y) / c.pts.length;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) clusters.push({ cx: p.x, cy: p.y, pts: [p] });
+                    });
+
+                    // Analyze & Draw Vector Arrows
+                    ctx.lineWidth = 1.5;
+                    clusters.forEach(c => {
+                        if (c.pts.length < 5) return; // Ignore random noise
+
+                        // Determine circle size
+                        let maxRadiusSq = 0;
+                        c.pts.forEach(p => {
+                            const dSq = (p.x - c.cx)**2 + (p.y - c.cy)**2;
+                            if (dSq > maxRadiusSq) maxRadiusSq = dSq;
+                        });
+                        const radius = Math.sqrt(maxRadiusSq) + 15;
+
+                        // Draw bounding cell
+                        ctx.beginPath();
+                        ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
+                        ctx.arc(c.cx, c.cy, radius, 0, Math.PI * 2);
+                        ctx.stroke();
+
+                        // Sort by age to find direction (Oldest -> Newest)
+                        c.pts.sort((a, b) => b.age - a.age); 
+                        const half = Math.floor(c.pts.length / 2);
+                        const olderHalf = c.pts.slice(0, half);
+                        const newerHalf = c.pts.slice(half);
+
+                        if (olderHalf.length > 0 && newerHalf.length > 0) {
+                            const ox = olderHalf.reduce((sum, p) => sum + p.x, 0) / olderHalf.length;
+                            const oy = olderHalf.reduce((sum, p) => sum + p.y, 0) / olderHalf.length;
+                            const nx = newerHalf.reduce((sum, p) => sum + p.x, 0) / newerHalf.length;
+                            const ny = newerHalf.reduce((sum, p) => sum + p.y, 0) / newerHalf.length;
+                            
+                            const dx = nx - ox;
+                            const dy = ny - oy;
+                            const len = Math.sqrt(dx*dx + dy*dy);
+                            
+                            // Only draw if there is distinct movement
+                            if (len > 3) {
+                                ctx.beginPath();
+                                ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)'; 
+                                
+                                const arrowLen = Math.min(len * 2, radius * 1.5);
+                                const angle = Math.atan2(dy, dx);
+                                
+                                const startX = c.cx - Math.cos(angle) * (arrowLen/2);
+                                const startY = c.cy - Math.sin(angle) * (arrowLen/2);
+                                const endX = c.cx + Math.cos(angle) * (arrowLen/2);
+                                const endY = c.cy + Math.sin(angle) * (arrowLen/2);
+                                
+                                ctx.moveTo(startX, startY);
+                                ctx.lineTo(endX, endY);
+                                
+                                // Arrow head
+                                const headLen = 6;
+                                ctx.lineTo(endX - headLen * Math.cos(angle - Math.PI/6), endY - headLen * Math.sin(angle - Math.PI/6));
+                                ctx.moveTo(endX, endY);
+                                ctx.lineTo(endX - headLen * Math.cos(angle + Math.PI/6), endY - headLen * Math.sin(angle + Math.PI/6));
+                                ctx.stroke();
+                            }
+                        }
+                    });
+                }
             }
         });
 
         const lightningLayer = new LightningCanvasLayer().addTo(map);
 
+        // Keep local buffer clean up to 30 minutes
         setInterval(() => {
             const now = Date.now();
-            lightningLayer.strikes = lightningLayer.strikes.filter(s => (now - s.timestamp) <= (15 * 60 * 1000));
+            lightningLayer.strikes = lightningLayer.strikes.filter(s => (now - s.timestamp) <= (30 * 60 * 1000));
         }, 5000);
 
         const lightningAgeSlider = document.getElementById('lightning-age-slider');
@@ -307,7 +444,6 @@
                     timestamp: msg.timestamp
                 });
 
-                // Check if strike is visible on the user's current screen before playing sound
                 const bounds = map.getBounds();
                 if (bounds.contains([msg.lat, msg.lon])) {
                     playStrikeSound();
@@ -315,9 +451,8 @@
             }
         };
 
-        // --- 3. Optimized Radar Engine ---
+        // --- 3. Optimized & Auto-Refreshing Radar Engine ---
         const radarLayer = L.tileLayer('', { opacity: 0.65, maxNativeZoom: 7, transparent: true }).addTo(map);
-        
         const radarTimeline = document.getElementById('radar-timeline');
         const radarTimestamp = document.getElementById('radar-timestamp');
         const playBtn = document.getElementById('play-btn');
@@ -327,68 +462,85 @@
         let isPlaying = false;
         let playInterval = null;
 
-        async function initRadar() {
+        function setRadarFrame(index) {
+            if (!layerRadarCheckbox.checked || radarFrames.length === 0) return;
+            const frame = radarFrames[index];
+            
+            radarLayer.setUrl(`/api/radar/tile${frame.path}/512/{z}/{x}/{y}/2/1_1.png`);
+            
+            const date = new Date(frame.time * 1000);
+            radarTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+
+        async function fetchRadarData() {
             try {
                 const res = await fetch('/api/radar/metadata');
                 const data = await res.json();
-                
-                radarFrames = data.radar.past;
-                radarTimeline.max = radarFrames.length - 1;
-                radarTimeline.value = radarFrames.length - 1;
-                radarTimeline.disabled = false;
-                playBtn.disabled = false;
+                const newFrames = data.radar.past;
 
-                function setRadarFrame(index) {
-                    if (!layerRadarCheckbox.checked) return;
-                    const frame = radarFrames[index];
+                // Handle initial load OR dynamic updates without resetting playback
+                if (radarFrames.length === 0) {
+                    radarFrames = newFrames;
+                    radarTimeline.max = radarFrames.length - 1;
+                    radarTimeline.value = radarFrames.length - 1;
+                    radarTimeline.disabled = false;
+                    playBtn.disabled = false;
+                    setRadarFrame(radarFrames.length - 1);
+                } else if (newFrames[newFrames.length - 1].time > radarFrames[radarFrames.length - 1].time) {
+                    // We have new time frames!
+                    const wasAtLatest = parseInt(radarTimeline.value) === radarFrames.length - 1;
+                    radarFrames = newFrames;
+                    radarTimeline.max = radarFrames.length - 1;
                     
-                    radarLayer.setUrl(`/api/radar/tile${frame.path}/512/{z}/{x}/{y}/2/1_1.png`);
-                    
-                    const date = new Date(frame.time * 1000);
-                    radarTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
-                }
-
-                radarTimeline.addEventListener('input', (e) => {
-                    if (isPlaying) stopLoop();
-                    setRadarFrame(e.target.value);
-                });
-
-                layerRadarCheckbox.addEventListener('change', (e) => {
-                    if (e.target.checked) {
-                        setRadarFrame(radarTimeline.value);
-                        map.addLayer(radarLayer);
-                    } else {
-                        map.removeLayer(radarLayer);
-                        radarTimestamp.innerText = '--:--';
+                    // If user was watching the live edge, bump them to the new live edge
+                    if (wasAtLatest && !isPlaying) {
+                        radarTimeline.value = radarFrames.length - 1;
+                        setRadarFrame(radarFrames.length - 1);
                     }
-                });
-
-                function runLoop() {
-                    isPlaying = true;
-                    playBtn.innerText = 'Pause';
-                    playInterval = setInterval(() => {
-                        let next = parseInt(radarTimeline.value) + 1;
-                        if (next >= radarFrames.length) next = 0;
-                        radarTimeline.value = next;
-                        setRadarFrame(next);
-                    }, 1000);
                 }
-
-                function stopLoop() {
-                    isPlaying = false;
-                    playBtn.innerText = 'Play';
-                    clearInterval(playInterval);
-                }
-
-                playBtn.addEventListener('click', () => isPlaying ? stopLoop() : runLoop());
-                setRadarFrame(radarFrames.length - 1);
-
             } catch (err) {
-                console.error("Radar error:", err);
-                radarTimestamp.innerText = "Error";
+                console.error("Radar sync error:", err);
             }
         }
-        initRadar();
+        
+        // Initial Fetch
+        fetchRadarData();
+        // Background Auto-Updater (Every 2 minutes)
+        setInterval(fetchRadarData, 120000);
+
+        radarTimeline.addEventListener('input', (e) => {
+            if (isPlaying) stopLoop();
+            setRadarFrame(e.target.value);
+        });
+
+        layerRadarCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                setRadarFrame(radarTimeline.value);
+                map.addLayer(radarLayer);
+            } else {
+                map.removeLayer(radarLayer);
+                radarTimestamp.innerText = '--:--';
+            }
+        });
+
+        function runLoop() {
+            isPlaying = true;
+            playBtn.innerText = 'Pause';
+            playInterval = setInterval(() => {
+                let next = parseInt(radarTimeline.value) + 1;
+                if (next >= radarFrames.length) next = 0;
+                radarTimeline.value = next;
+                setRadarFrame(next);
+            }, 1000);
+        }
+
+        function stopLoop() {
+            isPlaying = false;
+            playBtn.innerText = 'Play';
+            clearInterval(playInterval);
+        }
+
+        playBtn.addEventListener('click', () => isPlaying ? stopLoop() : runLoop());
     </script>
 </body>
 </html>
