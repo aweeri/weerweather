@@ -276,7 +276,8 @@
                 
                 if (!document.getElementById('layer-lightning').checked) return;
                 
-                const now = window.unifiedTimeMs || Date.now();
+                const now = (window.isLive && !window.isPlaying) ? Date.now() : (window.unifiedTimeMs || Date.now());
+                if (window.isLive && !window.isPlaying) window.unifiedTimeMs = now;
                 const bounds = this._map.getBounds();
                 const south = bounds.getSouth();
                 const north = bounds.getNorth();
@@ -308,7 +309,7 @@
                     ctx.fillStyle = `rgb(255, ${g}, ${b})`;
                     ctx.fillText('×', pt.x, pt.y);
 
-                    if (age < 600) {
+                    if (window.isLive && age < 600) {
                         const animProgress = age / 600;
                         const radius = 40 * (1 - animProgress);
                         const alpha = 1 - Math.pow(animProgress, 2);
@@ -447,6 +448,7 @@
         });
 
         // Websocket
+        window.isLive = true;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsHost = window.location.port === '5500' ? 'localhost:3000' : window.location.host;
         const ws = new WebSocket(`${protocol}//${wsHost}`);
@@ -458,12 +460,13 @@
             } else if (msg.type === 'strike') {
                 lightningLayer.strikes.push({ lat: msg.lat, lon: msg.lon, timestamp: msg.timestamp });
                 const bounds = map.getBounds();
-                if (bounds.contains([msg.lat, msg.lon])) playStrikeSound();
+                if (window.isLive && bounds.contains([msg.lat, msg.lon])) playStrikeSound();
             }
         };
 
         // Radar & Unified Timeline Engine
         window.unifiedTimeMs = Date.now();
+        window.isPlaying = false;
         
         const radarLayers = {};
         let currentFramePath = null;
@@ -475,7 +478,6 @@
         const layerRadarCheckbox = document.getElementById('layer-radar');
 
         let radarFrames = [];
-        let isPlaying = false;
         let playInterval = null;
         let currentSpeedIdx = 0;
         
@@ -488,19 +490,22 @@
         function syncTimelineState() {
             const val = parseInt(uniTimeline.value);
             const max = parseInt(uniTimeline.max);
-            window.unifiedTimeMs = val * 1000;
-
-            const date = new Date(window.unifiedTimeMs);
-            uniTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
             
-            if (val >= max - 60) {
+            window.isLive = (val >= max - 60);
+
+            if (window.isLive && !window.isPlaying) {
+                window.unifiedTimeMs = Date.now();
                 uniStatus.innerText = 'LIVE';
                 uniStatus.style.color = '#10b981';
             } else {
+                window.unifiedTimeMs = val * 1000;
                 const minsAgo = Math.floor((max - val) / 60);
                 uniStatus.innerText = `-${minsAgo} MIN`;
                 uniStatus.style.color = 'var(--text-mute)';
             }
+
+            const date = new Date(window.unifiedTimeMs);
+            uniTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
             updateRadarVisuals();
         }
@@ -566,7 +571,7 @@
                         }
                     }
 
-                    if (wasLive && !isPlaying) {
+                    if (wasLive && !window.isPlaying) {
                         uniTimeline.value = uniTimeline.max;
                         syncTimelineState();
                     }
@@ -578,16 +583,21 @@
         
         fetchRadarData();
         setInterval(() => {
-            if (radarFrames.length > 0 && !isPlaying && parseInt(uniTimeline.value) >= parseInt(uniTimeline.max) - 60) {
-                uniTimeline.max = Math.floor(Date.now() / 1000);
-                uniTimeline.value = uniTimeline.max;
-                syncTimelineState();
+            if (radarFrames.length > 0) {
+                const nowSec = Math.floor(Date.now() / 1000);
+                uniTimeline.max = nowSec;
+                if (window.isLive && !window.isPlaying) {
+                    uniTimeline.value = nowSec;
+                    window.unifiedTimeMs = Date.now();
+                    const date = new Date(window.unifiedTimeMs);
+                    uniTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+                }
             }
-        }, 60000);
+        }, 1000);
         setInterval(fetchRadarData, 120000);
 
         uniTimeline.addEventListener('input', () => {
-            if (isPlaying) stopLoop();
+            if (window.isPlaying) stopLoop();
             syncTimelineState();
         });
 
@@ -603,7 +613,7 @@
 
         function runLoop() {
             if (playInterval) clearInterval(playInterval);
-            isPlaying = true;
+            window.isPlaying = true;
             playBtn.innerText = '❚❚ Pause';
             
             const speed = speeds[currentSpeedIdx];
@@ -618,17 +628,18 @@
         }
 
         function stopLoop() {
-            isPlaying = false;
+            window.isPlaying = false;
             playBtn.innerText = '▶ Play';
             clearInterval(playInterval);
+            syncTimelineState();
         }
 
-        playBtn.addEventListener('click', () => isPlaying ? stopLoop() : runLoop());
+        playBtn.addEventListener('click', () => window.isPlaying ? stopLoop() : runLoop());
         
         speedBtn.addEventListener('click', () => {
             currentSpeedIdx = (currentSpeedIdx + 1) % speeds.length;
             speedBtn.innerText = speeds[currentSpeedIdx].label;
-            if (isPlaying) runLoop(); 
+            if (window.isPlaying) runLoop(); 
         });
     </script>
 </body>
