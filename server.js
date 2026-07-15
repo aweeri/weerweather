@@ -19,7 +19,7 @@ const CACHE_FILE = path.join(DATA_DIR, 'strikes.json');
 
 // --- 1. Lightning Core & History Cache ---
 let strikeCache = [];
-const MAX_STRIKE_AGE_MS = 30 * 60 * 1000; // 30 minutes
+const MAX_STRIKE_AGE_MS = 6 * 60 * 60 * 1000; // 6 hours to cover radar span + 3h history
 
 // Load saved strikes from hard drive on boot
 if (fs.existsSync(CACHE_FILE)) {
