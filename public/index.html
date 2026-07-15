@@ -18,19 +18,6 @@
         #map { height: 100vh; width: 100vw; }
         .leaflet-container { background: #09090b; }
         
-        .strike-x-icon {
-            font-family: inherit;
-            font-weight: bold;
-            font-size: 14px;
-            line-height: 1;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            pointer-events: none;
-            color: #ffffff;
-            transition: color 0.5s ease;
-        }
-
         #control-panel {
             position: absolute;
             top: 16px;
@@ -49,9 +36,7 @@
             padding: 12px;
             border-bottom: 1px solid var(--border-color);
         }
-        .panel-section:last-child {
-            border-bottom: none;
-        }
+        .panel-section:last-child { border-bottom: none; }
 
         .section-header {
             color: var(--text-mute);
@@ -62,28 +47,12 @@
             letter-spacing: 0.05em;
         }
 
-        .control-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-        .control-row:last-child {
-            margin-bottom: 0;
-        }
+        .control-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+        .control-row:last-child { margin-bottom: 0; }
 
-        .slider-label {
-            display: flex;
-            justify-content: space-between;
-            margin-bottom: 6px;
-        }
+        .slider-label { display: flex; justify-content: space-between; margin-bottom: 6px; }
 
-        .switch {
-            position: relative;
-            display: inline-block;
-            width: 32px;
-            height: 16px;
-        }
+        .switch { position: relative; display: inline-block; width: 32px; height: 16px; }
         .switch input { opacity: 0; width: 0; height: 0; }
         .slider {
             position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
@@ -155,9 +124,10 @@
             <div class="section-header">Lightning History</div>
             <div class="slider-label">
                 <span>Max Age</span>
-                <span id="lightning-age-val" style="font-weight: bold;">15m</span>
+                <span id="lightning-age-val" style="font-weight: bold;">1m</span>
             </div>
-            <input type="range" id="lightning-age-slider" min="1" max="15" value="15">
+            <!-- Defaulted to 1 minute -->
+            <input type="range" id="lightning-age-slider" min="1" max="15" value="1">
         </div>
 
         <div class="panel-section">
@@ -172,151 +142,157 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        const map = L.map('map', { zoomControl: false, attributionControl: false, preferCanvas: true }).setView([50.29, 18.66], 5);
+        const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-        const lightningLayer = L.layerGroup().addTo(map);
-        
-        let radarFrames = [];
-        let radarLayers = []; 
-        
-        let lightningStrikes = []; 
-        let maxAgeMs = 15 * 60 * 1000; 
-        let displayAgeMs = 15 * 60 * 1000; 
+        // --- 1. Pure Canvas Lightning Engine (Zero DOM, Zero Lag) ---
+        const LightningCanvasLayer = L.Layer.extend({
+            initialize: function() {
+                this.strikes = [];
+                this.displayAgeMs = 1 * 60 * 1000; // 1 minute default
+            },
+            onAdd: function(map) {
+                this._map = map;
+                this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
+                this._canvas.style.pointerEvents = 'none'; // Let mouse events pass through to map
+                map.getPanes().overlayPane.appendChild(this._canvas);
+                map.on('zoom move resize', this._update, this);
+                this._update();
+                
+                // Hardware accelerated 60 FPS render loop
+                this._animating = true;
+                const loop = () => {
+                    if (!this._animating) return;
+                    this.redraw();
+                    requestAnimationFrame(loop);
+                };
+                requestAnimationFrame(loop);
+            },
+            onRemove: function(map) {
+                this._animating = false;
+                L.DomUtil.remove(this._canvas);
+                map.off('zoom move resize', this._update, this);
+            },
+            _update: function() {
+                if (!this._map) return;
+                const size = this._map.getSize();
+                this._canvas.width = size.x;
+                this._canvas.height = size.y;
+                const topLeft = this._map.containerPointToLayerPoint([0, 0]);
+                L.DomUtil.setPosition(this._canvas, topLeft);
+            },
+            redraw: function() {
+                if (!this._map || !this._canvas) return;
+                const ctx = this._canvas.getContext('2d');
+                ctx.clearRect(0, 0, this._canvas.width, this._canvas.height);
+                
+                if (!document.getElementById('layer-lightning').checked) return;
+                
+                ctx.font = 'bold 12px ui-monospace, monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                const now = Date.now();
+                const bounds = this._map.getBounds();
+                
+                // Pre-compute spatial boundaries for instant culling math
+                const south = bounds.getSouth();
+                const north = bounds.getNorth();
+                const west = bounds.getWest();
+                const east = bounds.getEast();
+                
+                for (let i = 0; i < this.strikes.length; i++) {
+                    const strike = this.strikes[i];
+                    const age = now - strike.timestamp;
+                    
+                    // Temporal Cull: Skip drawing if older than slider limit
+                    if (age > this.displayAgeMs) continue;
+                    
+                    // Spatial Cull: Skip math/drawing entirely if the coordinate is physically off-screen
+                    if (strike.lat < south || strike.lat > north || strike.lon < west || strike.lon > east) {
+                        continue;
+                    }
+                    
+                    const pt = this._map.latLngToContainerPoint([strike.lat, strike.lon]);
+                    
+                    // Apply fading gradient color
+                    const ratio = age / this.displayAgeMs;
+                    const g = Math.round(255 * (1 - ratio));
+                    const b = Math.round(255 * (1 - ratio));
+                    
+                    ctx.fillStyle = `rgb(255, ${g}, ${b})`;
+                    ctx.fillText('×', pt.x, pt.y);
+                }
+            }
+        });
 
-        // --- 1. Viewport Culling & Color Logic (The Anti-Lag Engine) ---
+        const lightningLayer = new LightningCanvasLayer().addTo(map);
+
+        // Memory cleanup: Delete data older than 15m entirely from the array
+        setInterval(() => {
+            const now = Date.now();
+            lightningLayer.strikes = lightningLayer.strikes.filter(s => (now - s.timestamp) <= (15 * 60 * 1000));
+        }, 5000);
+
+        // UI Controls
         const lightningAgeSlider = document.getElementById('lightning-age-slider');
         const lightningAgeVal = document.getElementById('lightning-age-val');
-        const layerLightningCheckbox = document.getElementById('layer-lightning');
 
         lightningAgeSlider.addEventListener('input', (e) => {
             lightningAgeVal.innerText = `${e.target.value}m`;
-            displayAgeMs = parseInt(e.target.value) * 60 * 1000;
-            updateLightningViewport();
+            lightningLayer.displayAgeMs = parseInt(e.target.value) * 60 * 1000;
         });
 
-        layerLightningCheckbox.addEventListener('change', updateLightningViewport);
-        map.on('moveend', updateLightningViewport); 
-
-        function updateLightningViewport() {
-            const now = Date.now();
-            const bounds = map.getBounds();
-            const isLayerEnabled = layerLightningCheckbox.checked;
-
-            for (let i = lightningStrikes.length - 1; i >= 0; i--) {
-                const strike = lightningStrikes[i];
-                const age = now - strike.timestamp;
-
-                // 1. Hard cache eviction
-                if (age > maxAgeMs) {
-                    if (strike.marker) lightningLayer.removeLayer(strike.marker);
-                    lightningStrikes.splice(i, 1);
-                    continue;
-                }
-
-                // 2. Spatial & Temporal check
-                const isVisibleTime = age <= displayAgeMs;
-                const isVisibleSpace = bounds.contains([strike.lat, strike.lon]);
-
-                if (isVisibleTime && isVisibleSpace && isLayerEnabled) {
-                    // Mount marker if missing
-                    if (!strike.marker) {
-                        const markerIcon = L.divIcon({ className: 'strike-x-icon', html: '×', iconSize: [12, 12], iconAnchor: [6, 6] });
-                        strike.marker = L.marker([strike.lat, strike.lon], { icon: markerIcon });
-                        strike.marker.addTo(lightningLayer);
-                    }
-                    
-                    // Paint color
-                    const element = strike.marker.getElement();
-                    if (element) {
-                        const ratio = age / displayAgeMs; 
-                        const g = Math.round(255 * (1 - ratio));
-                        const b = Math.round(255 * (1 - ratio));
-                        element.style.color = `rgb(255, ${g}, ${b})`;
-                    }
-                } else {
-                    // Unmount marker to save RAM
-                    if (strike.marker) {
-                        lightningLayer.removeLayer(strike.marker);
-                        strike.marker = null;
-                    }
-                }
-            }
-        }
-
-        // Run sweep every 1s
-        setInterval(updateLightningViewport, 1000);
-
-        // --- 2. Live Websocket Setup ---
+        // --- 2. Live Websocket Connection ---
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsHost = window.location.port === '5500' ? 'localhost:3000' : window.location.host;
         const ws = new WebSocket(`${protocol}//${wsHost}`);
 
         ws.onmessage = (event) => {
             const msg = JSON.parse(event.data);
-            
             if (msg.type === 'history') {
-                // Populate historical buffer immediately on reload
-                lightningStrikes = msg.data.map(strike => ({
-                    lat: strike.lat,
-                    lon: strike.lon,
-                    timestamp: strike.timestamp,
-                    marker: null
-                }));
-                updateLightningViewport();
+                lightningLayer.strikes = msg.data;
             } else if (msg.type === 'strike') {
-                // Parse live strikes
-                lightningStrikes.push({
+                lightningLayer.strikes.push({
                     lat: msg.lat,
                     lon: msg.lon,
-                    timestamp: msg.timestamp,
-                    marker: null
+                    timestamp: msg.timestamp
                 });
-                updateLightningViewport();
             }
         };
 
-        // --- 3. Local-Proxy Pre-cached Radar Engine ---
+        // --- 3. Optimized Radar Engine ---
+        // Exclusively fetch tiles for the current map view
+        const radarLayer = L.tileLayer('', { opacity: 0.65, maxNativeZoom: 7, transparent: true }).addTo(map);
+        
         const radarTimeline = document.getElementById('radar-timeline');
         const radarTimestamp = document.getElementById('radar-timestamp');
         const playBtn = document.getElementById('play-btn');
         const layerRadarCheckbox = document.getElementById('layer-radar');
 
+        let radarFrames = [];
         let isPlaying = false;
         let playInterval = null;
 
         async function initRadar() {
             try {
-                // Hit local server API to avoid CORS and rate limits
                 const res = await fetch('/api/radar/metadata');
                 const data = await res.json();
                 
                 radarFrames = data.radar.past;
                 radarTimeline.max = radarFrames.length - 1;
                 radarTimeline.value = radarFrames.length - 1;
-                
-                // Pre-cache all frames through our local secure proxy
-                radarFrames.forEach((frame) => {
-                    const layer = L.tileLayer(`/api/radar/tile${frame.path}/512/{z}/{x}/{y}/2/1_1.png`, {
-                        opacity: 0,
-                        maxNativeZoom: 7,
-                        transparent: true
-                    }).addTo(map);
-                    radarLayers.push(layer);
-                });
-
                 radarTimeline.disabled = false;
                 playBtn.disabled = false;
 
                 function setRadarFrame(index) {
                     if (!layerRadarCheckbox.checked) return;
+                    const frame = radarFrames[index];
                     
-                    // Instant opacity swap
-                    radarLayers.forEach((layer, i) => {
-                        layer.setOpacity(i === parseInt(index) ? 0.65 : 0);
-                    });
+                    // URL update automatically fetches tiles via your local server cache
+                    radarLayer.setUrl(`/api/radar/tile${frame.path}/512/{z}/{x}/{y}/2/1_1.png`);
                     
-                    const date = new Date(radarFrames[index].time * 1000);
+                    const date = new Date(frame.time * 1000);
                     radarTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
                 }
 
@@ -328,8 +304,9 @@
                 layerRadarCheckbox.addEventListener('change', (e) => {
                     if (e.target.checked) {
                         setRadarFrame(radarTimeline.value);
+                        map.addLayer(radarLayer);
                     } else {
-                        radarLayers.forEach(layer => layer.setOpacity(0));
+                        map.removeLayer(radarLayer);
                         radarTimestamp.innerText = '--:--';
                     }
                 });
@@ -352,7 +329,6 @@
                 }
 
                 playBtn.addEventListener('click', () => isPlaying ? stopLoop() : runLoop());
-                
                 setRadarFrame(radarFrames.length - 1);
 
             } catch (err) {
