@@ -1,6 +1,8 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(express.static('public'));
@@ -8,10 +10,48 @@ app.use(express.static('public'));
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// --- 0. Persistent Disk Storage Setup ---
+const DATA_DIR = path.join(__dirname, 'data');
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR);
+}
+const CACHE_FILE = path.join(DATA_DIR, 'strikes.json');
+
 // --- 1. Lightning Core & History Cache ---
 let strikeCache = [];
-// Increased backend cache to 30 minutes
-const MAX_STRIKE_AGE_MS = 30 * 60 * 1000; 
+const MAX_STRIKE_AGE_MS = 30 * 60 * 1000; // 30 minutes
+
+// Load saved strikes from hard drive on boot
+if (fs.existsSync(CACHE_FILE)) {
+    try {
+        const rawData = fs.readFileSync(CACHE_FILE, 'utf8');
+        const loaded = JSON.parse(rawData);
+        const now = Date.now();
+        // Only keep strikes that are still under 30 minutes old
+        strikeCache = loaded.filter(s => now - s.timestamp <= MAX_STRIKE_AGE_MS);
+        console.log(`[Storage] Successfully restored ${strikeCache.length} historical strikes from disk.`);
+    } catch (err) {
+        console.error('[Storage] Error reading save file:', err.message);
+    }
+}
+
+function saveStrikesToDisk() {
+    try {
+        fs.writeFileSync(CACHE_FILE, JSON.stringify(strikeCache));
+    } catch (err) {
+        console.error('[Storage] Error writing save file:', err.message);
+    }
+}
+
+// Auto-save every 10 seconds just in case of a crash
+setInterval(saveStrikesToDisk, 10000);
+
+// Panic-save right before Docker kills the container during an Update
+process.on('SIGTERM', () => {
+    console.log('[Storage] Container updating... Saving lightning history to disk.');
+    saveStrikesToDisk();
+    process.exit(0);
+});
 
 function addStrikeToCache(lat, lon) {
     const now = Date.now();
