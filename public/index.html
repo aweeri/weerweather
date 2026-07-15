@@ -546,6 +546,147 @@
             clearInterval(playInterval);
         }
         playBtn.addEventListener('click', () => isPlaying ? stopLoop() : runLoop());
+
+        // Prediction Engine
+        const predictionLayer = L.layerGroup().addTo(map);
+
+        function loadTileImage(url) {
+            return new Promise((resolve, reject) => {
+                const img = new Image();
+                img.onload = () => resolve(img);
+                img.onerror = reject;
+                img.src = url;
+            });
+        }
+
+        map.on('click', async (e) => {
+            if (!layerRadarCheckbox.checked || radarFrames.length < 2) {
+                predictionLayer.clearLayers();
+                return;
+            }
+            
+            const currentIndex = parseInt(radarTimeline.value);
+            if (currentIndex < 1) return;
+
+            const t0 = radarFrames[currentIndex];
+            const tMinus1 = radarFrames[currentIndex - 1];
+
+            // Project at zoom 6 to match the standard radar tile scale
+            const z = 6;
+            const projected = map.project(e.latlng, z);
+            const xTile = Math.floor(projected.x / 256);
+            const yTile = Math.floor(projected.y / 256);
+            
+            // Calculate pixel offset within the 512px retina tile
+            const pxX = Math.floor((projected.x % 256) * 2);
+            const pxY = Math.floor((projected.y % 256) * 2);
+
+            const url0 = `/api/radar/tile${t0.path}/512/${z}/${xTile}/${yTile}/2/1_1.png`;
+            const url1 = `/api/radar/tile${tMinus1.path}/512/${z}/${xTile}/${yTile}/2/1_1.png`;
+
+            try {
+                const [img0, img1] = await Promise.all([loadTileImage(url0), loadTileImage(url1)]);
+                
+                const canvas = document.createElement('canvas');
+                canvas.width = 512; 
+                canvas.height = 512;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+                
+                ctx.drawImage(img0, 0, 0);
+                const data0 = ctx.getImageData(0, 0, 512, 512).data;
+                
+                ctx.drawImage(img1, 0, 0);
+                const data1 = ctx.getImageData(0, 0, 512, 512).data;
+
+                const searchRadius = 32;
+                const templateRadius = 12; // 24x24 template window
+                
+                // Verify target has valid precipitation density
+                let hasRain = false;
+                for (let ty = -templateRadius; ty <= templateRadius; ty++) {
+                    for (let tx = -templateRadius; tx <= templateRadius; tx++) {
+                        const txP = pxX + tx, tyP = pxY + ty;
+                        if (txP >= 0 && txP < 512 && tyP >= 0 && tyP < 512) {
+                            if (data0[((tyP) * 512 + (txP)) * 4 + 3] > 10) hasRain = true;
+                        }
+                    }
+                }
+
+                if (!hasRain) {
+                    predictionLayer.clearLayers();
+                    return; 
+                }
+
+                // Sum of Absolute Differences (SAD) block matching
+                let bestDx = 0, bestDy = 0;
+                let minSAD = Infinity;
+
+                for (let dy = -searchRadius; dy <= searchRadius; dy++) {
+                    for (let dx = -searchRadius; dx <= searchRadius; dx++) {
+                        let sad = 0;
+                        for (let ty = -templateRadius; ty <= templateRadius; ty++) {
+                            for (let tx = -templateRadius; tx <= templateRadius; tx++) {
+                                const t0X = pxX + tx, t0Y = pxY + ty;
+                                const t1X = pxX + tx + dx, t1Y = pxY + ty + dy;
+                                
+                                if (t0X >= 0 && t0X < 512 && t0Y >= 0 && t0Y < 512 &&
+                                    t1X >= 0 && t1X < 512 && t1Y >= 0 && t1Y < 512) {
+                                    const a0 = data0[(t0Y * 512 + t0X) * 4 + 3];
+                                    const a1 = data1[(t1Y * 512 + t1X) * 4 + 3];
+                                    sad += Math.abs(a0 - a1);
+                                } else {
+                                    sad += 255; // Penalize out of bounds comparisons
+                                }
+                            }
+                        }
+                        if (sad < minSAD) {
+                            minSAD = sad;
+                            bestDx = dx;
+                            bestDy = dy;
+                        }
+                    }
+                }
+
+                if (bestDx === 0 && bestDy === 0) return;
+
+                // Divide by 2 because local processing was on a 512px grid but Leaflet maps on 256px
+                const vx = -bestDx / 2;
+                const vy = -bestDy / 2;
+
+                const timeDiffMins = (t0.time - tMinus1.time) / 60;
+                const steps = Math.floor(120 / (timeDiffMins || 10)); // Extrapolate 2 hours
+
+                const pathLatLngs = [e.latlng];
+                let curPxX = projected.x;
+                let curPxY = projected.y;
+
+                for (let i = 1; i <= steps; i++) {
+                    curPxX += vx;
+                    curPxY += vy;
+                    pathLatLngs.push(map.unproject([curPxX, curPxY], z));
+                }
+
+                predictionLayer.clearLayers();
+                
+                L.polyline(pathLatLngs, { 
+                    color: '#f4f4f5', 
+                    weight: 2, 
+                    dashArray: '4, 8', 
+                    opacity: 0.9 
+                }).addTo(predictionLayer);
+
+                L.circleMarker(pathLatLngs[pathLatLngs.length - 1], {
+                    radius: 3,
+                    color: '#f4f4f5',
+                    fillColor: '#09090b',
+                    fillOpacity: 1,
+                    weight: 2
+                }).addTo(predictionLayer);
+
+            } catch (err) {
+                console.error("Prediction matrix failed:", err);
+            }
+        });
     </script>
 </body>
 </html>
