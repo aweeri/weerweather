@@ -16,126 +16,148 @@
             transition: opacity 1.5s ease-out;
         }
 
-        /* Time Slider UI */
-        #timeline-ui {
+        /* Control Panels */
+        .panel {
             position: absolute;
-            bottom: 30px;
-            left: 50%;
-            transform: translateX(-50%);
             z-index: 1000;
             background: rgba(20, 20, 20, 0.85);
-            padding: 15px 25px;
             border-radius: 12px;
             border: 1px solid #333;
             color: #fff;
+            backdrop-filter: blur(5px);
+            padding: 15px;
+        }
+
+        /* Time Slider UI */
+        #timeline-ui {
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
             display: flex;
             align-items: center;
             gap: 15px;
-            backdrop-filter: blur(5px);
             width: 300px;
         }
 
-        #timestamp {
-            font-size: 14px;
-            font-weight: bold;
-            min-width: 75px;
+        #timestamp { font-size: 14px; font-weight: bold; min-width: 50px; text-align: center; }
+        #time-slider { flex-grow: 1; cursor: pointer; accent-color: #fce803; }
+
+        /* Layer Toggles */
+        #layer-ui {
+            top: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
         }
 
-        #time-slider {
-            flex-grow: 1;
-            cursor: pointer;
-            accent-color: #fce803;
+        .toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 20px; font-size: 14px; font-weight: bold;}
+        
+        /* Custom Checkbox */
+        input[type="checkbox"] {
+            appearance: none; width: 40px; height: 20px; background: #444; border-radius: 20px; position: relative; cursor: pointer; outline: none;
         }
+        input[type="checkbox"]::after {
+            content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: #fff; border-radius: 50%; transition: 0.2s;
+        }
+        input[type="checkbox"]:checked { background: #fce803; }
+        input[type="checkbox"]:checked::after { left: 22px; background: #000; }
+        
+        .disabled-text { color: #666; text-decoration: line-through; }
     </style>
 </head>
 <body>
     <div id="map"></div>
     
-    <div id="timeline-ui">
-        <div id="timestamp">Loading...</div>
+    <!-- Layer Toggles -->
+    <div id="layer-ui" class="panel">
+        <div class="toggle-row">
+            <span>Rain Radar</span>
+            <input type="checkbox" id="toggle-radar" checked>
+        </div>
+        <div class="toggle-row">
+            <span>Lightning</span>
+            <input type="checkbox" id="toggle-lightning" checked>
+        </div>
+        <div class="toggle-row">
+            <span class="disabled-text" title="API Support Discontinued in 2026">Clouds (IR)</span>
+            <input type="checkbox" disabled>
+        </div>
+    </div>
+
+    <!-- Timeline Slider -->
+    <div id="timeline-ui" class="panel">
+        <div id="timestamp">--:--</div>
         <input type="range" id="time-slider" min="0" max="0" value="0" step="1" disabled>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        const map = L.map('map', { 
-            zoomControl: false,
-            attributionControl: false 
-        }).setView([50.29, 18.66], 5);
-
-        // Base Map
+        const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-        let radarLayers = [];
+        // Map Layers
+        const radarLayer = L.tileLayer('', { opacity: 0.65, maxNativeZoom: 7, transparent: true }).addTo(map);
+        const lightningLayer = L.layerGroup().addTo(map);
+
+        let radarFrames = [];
 
         async function loadRadar() {
             try {
                 const res = await fetch('https://api.rainviewer.com/public/weather-maps.json');
                 const data = await res.json();
                 
+                radarFrames = data.radar.past;
                 const slider = document.getElementById('time-slider');
-                
-                // Pre-load all available past radar frames
-                data.radar.past.forEach((frame) => {
-                    const layer = L.tileLayer(`https://tilecache.rainviewer.com${frame.path}/256/{z}/{x}/{y}/2/1_1.png`, {
-                        opacity: 0, // Hidden by default
-                        transparent: true,
-                        maxNativeZoom: 7 // FIX: Prevents "Zoom unsupported" by stretching tiles when zooming in further
-                    }).addTo(map);
-                    
-                    radarLayers.push({ layer, time: frame.time });
-                });
-
-                // Configure slider
-                slider.max = radarLayers.length - 1;
-                slider.value = radarLayers.length - 1;
+                slider.max = radarFrames.length - 1;
+                slider.value = radarFrames.length - 1;
                 slider.disabled = false;
 
-                function showFrame(index) {
-                    // Hide all frames
-                    radarLayers.forEach(r => r.layer.setOpacity(0));
-                    // Show selected frame
-                    radarLayers[index].layer.setOpacity(0.65);
+                function updateRadarFrame(index) {
+                    const frame = radarFrames[index];
+                    // Using 512px tiles to avoid the strict 100 req/minute rate limit
+                    radarLayer.setUrl(`https://tilecache.rainviewer.com${frame.path}/512/{z}/{x}/{y}/2/1_1.png`);
                     
-                    // Update timestamp display
-                    const date = new Date(radarLayers[index].time * 1000);
-                    document.getElementById('timestamp').innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    const date = new Date(frame.time * 1000);
+                    // Forced 24-hour mode
+                    document.getElementById('timestamp').innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
                 }
 
-                // Listen for slider movement
-                slider.addEventListener('input', (e) => {
-                    showFrame(e.target.value);
-                });
-
-                // Show the latest frame initially
-                showFrame(radarLayers.length - 1);
+                slider.addEventListener('input', (e) => updateRadarFrame(e.target.value));
+                updateRadarFrame(radarFrames.length - 1);
 
             } catch (err) {
-                console.error("Radar load failed:", err);
-                document.getElementById('timestamp').innerText = "Radar Error";
+                console.error("Radar error:", err);
             }
         }
         loadRadar();
 
+        // UI Toggle Logic
+        document.getElementById('toggle-radar').addEventListener('change', (e) => {
+            e.target.checked ? map.addLayer(radarLayer) : map.removeLayer(radarLayer);
+        });
+        
+        document.getElementById('toggle-lightning').addEventListener('change', (e) => {
+            e.target.checked ? map.addLayer(lightningLayer) : map.removeLayer(lightningLayer);
+        });
+
+        // Lightning Websocket Logic
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsHost = window.location.port === '5500' ? 'localhost:3000' : window.location.host;
         const ws = new WebSocket(`${protocol}//${wsHost}`);
         
         ws.onmessage = (event) => {
             const strike = JSON.parse(event.data);
+            const marker = L.divIcon({ className: 'lightning-strike', iconSize: [6, 6] });
+            const leafletMarker = L.marker([strike.lat, strike.lon], { icon: marker });
             
-            const marker = L.divIcon({
-                className: 'lightning-strike',
-                iconSize: [6, 6]
-            });
-            
-            const leafletMarker = L.marker([strike.lat, strike.lon], { icon: marker }).addTo(map);
-            
-            // Fading effect
-            setTimeout(() => {
-                leafletMarker.getElement().style.opacity = '0';
-                setTimeout(() => map.removeLayer(leafletMarker), 1500);
-            }, 100);
+            if (map.hasLayer(lightningLayer)) {
+                leafletMarker.addTo(lightningLayer);
+                setTimeout(() => {
+                    if (leafletMarker.getElement()) leafletMarker.getElement().style.opacity = '0';
+                    setTimeout(() => lightningLayer.removeLayer(leafletMarker), 1500);
+                }, 100);
+            }
         };
     </script>
 </body>
