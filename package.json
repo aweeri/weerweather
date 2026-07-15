@@ -4,7 +4,6 @@
   "main": "server.js",
   "dependencies": {
     "express": "^4.18.2",
-    "ws": "^8.16.0",
-    "@simonschick/blitzortungapi": "^1.0.0"
+    "ws": "^8.16.0"
   }
 }
