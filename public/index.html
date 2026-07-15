@@ -440,7 +440,8 @@
         };
 
         // Radar Engine
-        const radarLayer = L.tileLayer('', { opacity: 0.65, maxNativeZoom: 7, transparent: true }).addTo(map);
+        const radarLayers = {};
+        let currentFramePath = null;
         const radarTimeline = document.getElementById('radar-timeline');
         const radarTimestamp = document.getElementById('radar-timestamp');
         const playBtn = document.getElementById('play-btn');
@@ -451,9 +452,24 @@
         let playInterval = null;
 
         function setRadarFrame(index) {
-            if (!layerRadarCheckbox.checked || radarFrames.length === 0) return;
+            if (radarFrames.length === 0) return;
             const frame = radarFrames[index];
-            radarLayer.setUrl(`/api/radar/tile${frame.path}/512/{z}/{x}/{y}/2/1_1.png`);
+            
+            if (!radarLayers[frame.path]) {
+                const url = `/api/radar/tile${frame.path}/512/{z}/{x}/{y}/2/1_1.png`;
+                radarLayers[frame.path] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 7, transparent: true }).addTo(map);
+            }
+
+            if (currentFramePath && currentFramePath !== frame.path && radarLayers[currentFramePath]) {
+                radarLayers[currentFramePath].setOpacity(0);
+            }
+
+            currentFramePath = frame.path;
+            
+            if (layerRadarCheckbox.checked) {
+                radarLayers[frame.path].setOpacity(0.65);
+            }
+
             const date = new Date(frame.time * 1000);
             radarTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
         }
@@ -475,6 +491,15 @@
                     const wasAtLatest = parseInt(radarTimeline.value) === radarFrames.length - 1;
                     radarFrames = newFrames;
                     radarTimeline.max = radarFrames.length - 1;
+                    
+                    const activePaths = radarFrames.map(f => f.path);
+                    for (const path in radarLayers) {
+                        if (!activePaths.includes(path)) {
+                            map.removeLayer(radarLayers[path]);
+                            delete radarLayers[path];
+                        }
+                    }
+
                     if (wasAtLatest && !isPlaying) {
                         radarTimeline.value = radarFrames.length - 1;
                         setRadarFrame(radarFrames.length - 1);
@@ -496,9 +521,10 @@
         layerRadarCheckbox.addEventListener('change', (e) => {
             if (e.target.checked) {
                 setRadarFrame(radarTimeline.value);
-                map.addLayer(radarLayer);
             } else {
-                map.removeLayer(radarLayer);
+                if (currentFramePath && radarLayers[currentFramePath]) {
+                    radarLayers[currentFramePath].setOpacity(0);
+                }
                 radarTimestamp.innerText = '--:--';
             }
         });
