@@ -49,7 +49,6 @@
 
         .control-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
         .control-row:last-child { margin-bottom: 0; }
-
         .slider-label { display: flex; justify-content: space-between; margin-bottom: 6px; }
 
         .switch { position: relative; display: inline-block; width: 32px; height: 16px; }
@@ -103,7 +102,7 @@
 
     <div id="control-panel">
         <div class="panel-section">
-            <div class="section-header">Layers</div>
+            <div class="section-header">Overlays & Audio</div>
             <div class="control-row">
                 <span>Rain Radar</span>
                 <label class="switch">
@@ -118,6 +117,14 @@
                     <span class="slider"></span>
                 </label>
             </div>
+            <div class="control-row">
+                <span>Audio Ticks</span>
+                <label class="switch">
+                    <!-- Default off to comply with browser autoplay policies -->
+                    <input type="checkbox" id="toggle-sound">
+                    <span class="slider"></span>
+                </label>
+            </div>
         </div>
 
         <div class="panel-section">
@@ -126,7 +133,6 @@
                 <span>Max Age</span>
                 <span id="lightning-age-val" style="font-weight: bold;">1m</span>
             </div>
-            <!-- Defaulted to 1 minute -->
             <input type="range" id="lightning-age-slider" min="1" max="15" value="1">
         </div>
 
@@ -145,21 +151,56 @@
         const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-        // --- 1. Pure Canvas Lightning Engine (Zero DOM, Zero Lag) ---
+        // --- 0. Audio Synthesizer Engine ---
+        let audioCtx = null;
+        let isSoundEnabled = false;
+
+        document.getElementById('toggle-sound').addEventListener('change', (e) => {
+            isSoundEnabled = e.target.checked;
+            // Browsers require user interaction before granting audio context
+            if (isSoundEnabled && !audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            if (isSoundEnabled && audioCtx.state === 'suspended') {
+                audioCtx.resume();
+            }
+        });
+
+        function playStrikeSound() {
+            if (!isSoundEnabled || !audioCtx) return;
+            
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            
+            // Fast frequency drop creates a crisp "tick/click" sound
+            osc.type = 'sine';
+            osc.frequency.setValueAtTime(1200, audioCtx.currentTime);
+            osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.04);
+            
+            // Rapid fade out
+            gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.04);
+            
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.05);
+        }
+
+        // --- 1. Pure Canvas Lightning Engine ---
         const LightningCanvasLayer = L.Layer.extend({
             initialize: function() {
                 this.strikes = [];
-                this.displayAgeMs = 1 * 60 * 1000; // 1 minute default
+                this.displayAgeMs = 1 * 60 * 1000;
             },
             onAdd: function(map) {
                 this._map = map;
                 this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
-                this._canvas.style.pointerEvents = 'none'; // Let mouse events pass through to map
+                this._canvas.style.pointerEvents = 'none';
                 map.getPanes().overlayPane.appendChild(this._canvas);
                 map.on('zoom move resize', this._update, this);
                 this._update();
                 
-                // Hardware accelerated 60 FPS render loop
                 this._animating = true;
                 const loop = () => {
                     if (!this._animating) return;
@@ -188,14 +229,8 @@
                 
                 if (!document.getElementById('layer-lightning').checked) return;
                 
-                ctx.font = 'bold 12px ui-monospace, monospace';
-                ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
-                
                 const now = Date.now();
                 const bounds = this._map.getBounds();
-                
-                // Pre-compute spatial boundaries for instant culling math
                 const south = bounds.getSouth();
                 const north = bounds.getNorth();
                 const west = bounds.getWest();
@@ -205,36 +240,49 @@
                     const strike = this.strikes[i];
                     const age = now - strike.timestamp;
                     
-                    // Temporal Cull: Skip drawing if older than slider limit
                     if (age > this.displayAgeMs) continue;
-                    
-                    // Spatial Cull: Skip math/drawing entirely if the coordinate is physically off-screen
-                    if (strike.lat < south || strike.lat > north || strike.lon < west || strike.lon > east) {
-                        continue;
-                    }
+                    if (strike.lat < south || strike.lat > north || strike.lon < west || strike.lon > east) continue;
                     
                     const pt = this._map.latLngToContainerPoint([strike.lat, strike.lon]);
-                    
-                    // Apply fading gradient color
                     const ratio = age / this.displayAgeMs;
                     const g = Math.round(255 * (1 - ratio));
                     const b = Math.round(255 * (1 - ratio));
                     
+                    // A. Draw the permanent small marker
+                    ctx.font = 'bold 12px ui-monospace, monospace';
+                    ctx.textAlign = 'center';
+                    ctx.textBaseline = 'middle';
                     ctx.fillStyle = `rgb(255, ${g}, ${b})`;
                     ctx.fillText('×', pt.x, pt.y);
+
+                    // B. Draw the shrinking, razor-thin impact marker (Lives for 600ms)
+                    if (age < 600) {
+                        const animProgress = age / 600;
+                        const radius = 40 * (1 - animProgress); // Shrinks from 40px down to 0
+                        const alpha = 1 - Math.pow(animProgress, 2); // Fades out completely
+
+                        ctx.beginPath();
+                        ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+                        ctx.lineWidth = 0.5; // Razor thin physical lines
+                        
+                        // Draw an X manually
+                        ctx.moveTo(pt.x - radius, pt.y - radius);
+                        ctx.lineTo(pt.x + radius, pt.y + radius);
+                        ctx.moveTo(pt.x + radius, pt.y - radius);
+                        ctx.lineTo(pt.x - radius, pt.y + radius);
+                        ctx.stroke();
+                    }
                 }
             }
         });
 
         const lightningLayer = new LightningCanvasLayer().addTo(map);
 
-        // Memory cleanup: Delete data older than 15m entirely from the array
         setInterval(() => {
             const now = Date.now();
             lightningLayer.strikes = lightningLayer.strikes.filter(s => (now - s.timestamp) <= (15 * 60 * 1000));
         }, 5000);
 
-        // UI Controls
         const lightningAgeSlider = document.getElementById('lightning-age-slider');
         const lightningAgeVal = document.getElementById('lightning-age-val');
 
@@ -258,11 +306,16 @@
                     lon: msg.lon,
                     timestamp: msg.timestamp
                 });
+
+                // Check if strike is visible on the user's current screen before playing sound
+                const bounds = map.getBounds();
+                if (bounds.contains([msg.lat, msg.lon])) {
+                    playStrikeSound();
+                }
             }
         };
 
         // --- 3. Optimized Radar Engine ---
-        // Exclusively fetch tiles for the current map view
         const radarLayer = L.tileLayer('', { opacity: 0.65, maxNativeZoom: 7, transparent: true }).addTo(map);
         
         const radarTimeline = document.getElementById('radar-timeline');
@@ -289,7 +342,6 @@
                     if (!layerRadarCheckbox.checked) return;
                     const frame = radarFrames[index];
                     
-                    // URL update automatically fetches tiles via your local server cache
                     radarLayer.setUrl(`/api/radar/tile${frame.path}/512/{z}/{x}/{y}/2/1_1.png`);
                     
                     const date = new Date(frame.time * 1000);
