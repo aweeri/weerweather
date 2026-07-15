@@ -1,7 +1,10 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const { Blitzortung } = require('@simonschick/blitzortungapi');
+
+// Safely extract the client constructor however the module exports it
+const blitz = require('@simonschick/blitzortungapi');
+const BlitzClient = blitz.Client || blitz.default || blitz;
 
 const app = express();
 app.use(express.static('public'));
@@ -10,7 +13,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // Initialize Blitzortung client
-const bClient = new Blitzortung();
+const bClient = new BlitzClient();
 
 // Proxy live strikes to any connected frontend clients
 bClient.on('strike', (strike) => {
