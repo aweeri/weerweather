@@ -271,8 +271,16 @@
             if (isSoundEnabled && audioCtx.state === 'suspended') audioCtx.resume();
         });
 
+        document.body.addEventListener('click', () => {
+            if (isSoundEnabled && !audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+        });
+
         function playStrikeSound() {
-            if (!isSoundEnabled || !audioCtx) return;
+            if (!isSoundEnabled) return;
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            if (audioCtx.state === 'suspended') return;
+
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
             osc.connect(gain);
