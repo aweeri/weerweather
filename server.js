@@ -75,8 +75,9 @@ async function processPrefetchQueue() {
     while (prefetchQueue.length > 0) {
         const tilePath = prefetchQueue.shift();
         if (!tileCache.has(tilePath)) {
+            let targetUrl = '';
             try {
-                const targetUrl = `https://tilecache.rainviewer.com${tilePath}`;
+                targetUrl = `https://tilecache.rainviewer.com${tilePath}`;
                 const response = await fetch(targetUrl);
                 if (response.ok) {
                     const contentType = response.headers.get('content-type') || 'image/png';
@@ -87,9 +88,11 @@ async function processPrefetchQueue() {
                     prefetchQueue.unshift(tilePath);
                     await new Promise(r => setTimeout(r, 5000));
                     continue;
+                } else {
+                    console.error(`[Radar Cache] Prefetch failed: ${response.status} ${response.statusText} -> ${targetUrl}`);
                 }
             } catch (err) {
-                console.error('[Radar Cache] Prefetch error:', err.message);
+                console.error(`[Radar Cache] Prefetch error for ${targetUrl}:`, err.message);
             }
             await new Promise(r => setTimeout(r, 150));
         }
@@ -184,7 +187,10 @@ app.get('/api/radar/tile/*', async (req, res) => {
     const targetUrl = `https://tilecache.rainviewer.com${tilePath}`;
     try {
         const response = await fetch(targetUrl);
-        if (!response.ok) return res.status(response.status).end();
+        if (!response.ok) {
+            console.error(`[Radar Proxy] Tile fetch failed: ${response.status} ${response.statusText} -> ${targetUrl}`);
+            return res.status(response.status).end();
+        }
         
         const contentType = response.headers.get('content-type') || 'image/png';
         const arrayBuffer = await response.arrayBuffer();
@@ -194,6 +200,7 @@ app.get('/api/radar/tile/*', async (req, res) => {
         res.set('Content-Type', contentType);
         res.send(buffer);
     } catch (err) {
+        console.error(`[Radar Proxy] Network/Server error fetching ${targetUrl}:`, err.message);
         res.status(500).end();
     }
 });
