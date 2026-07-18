@@ -69,10 +69,16 @@
             user-select: none;
         }
         #panel-tab:hover { color: var(--text-main); }
+        #control-panel.collapsed { width: auto; }
         .collapsed #panel-body { display: none; }
-        .collapsed #panel-tab { border-bottom: none; }
+        .collapsed #panel-tab { border-bottom: none; text-align: center; }
 
         .panel-section { padding: 12px; border-bottom: 1px solid var(--border-color); }
+
+        @media (max-width: 600px) {
+            #unified-timeline-container { width: 95%; padding: 8px 12px; bottom: 12px; }
+            #control-panel { width: 200px; right: 12px; top: 12px; }
+        }
         .panel-section:last-child { border-bottom: none; }
         .section-header { color: var(--text-mute); margin-bottom: 8px; text-transform: uppercase; font-weight: bold; font-size: 9px; letter-spacing: 0.05em; }
         .control-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -274,6 +280,12 @@
         document.body.addEventListener('click', () => {
             if (isSoundEnabled && !audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && audioCtx && audioCtx.state === 'suspended' && isSoundEnabled) {
+                audioCtx.resume();
+            }
         });
 
         function playStrikeSound() {
@@ -539,18 +551,27 @@
         window.isLive = true;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsHost = window.location.port === '5500' ? 'localhost:3000' : window.location.host;
-        const ws = new WebSocket(`${protocol}//${wsHost}`);
+        
+        let ws;
+        function connectWebSocket() {
+            ws = new WebSocket(`${protocol}//${wsHost}`);
 
-        ws.onmessage = (event) => {
-            const msg = JSON.parse(event.data);
-            if (msg.type === 'history') {
-                lightningLayer.strikes = msg.data;
-            } else if (msg.type === 'strike') {
-                lightningLayer.strikes.push({ lat: msg.lat, lon: msg.lon, timestamp: Date.now() });
-                const bounds = map.getBounds();
-                if (window.isLive && bounds.contains([msg.lat, msg.lon])) playStrikeSound();
-            }
-        };
+            ws.onmessage = (event) => {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'history') {
+                    lightningLayer.strikes = msg.data;
+                } else if (msg.type === 'strike') {
+                    lightningLayer.strikes.push({ lat: msg.lat, lon: msg.lon, timestamp: Date.now() });
+                    const bounds = map.getBounds();
+                    if (window.isLive && bounds.contains([msg.lat, msg.lon])) playStrikeSound();
+                }
+            };
+
+            ws.onclose = () => {
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+        connectWebSocket();
 
         // Radar & Unified Timeline Engine
         window.unifiedTimeMs = Date.now();
