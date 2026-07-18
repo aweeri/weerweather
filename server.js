@@ -98,21 +98,29 @@ async function processPrefetchQueue() {
 }
 
 function queuePrefetch(metadata) {
-    if (!metadata || !metadata.radar || !metadata.radar.past) return;
+    if (!metadata) return;
     
-    metadata.radar.past.forEach(frame => {
+    function enqueueTiles(path, colorScheme) {
         for (let z = 0; z <= 3; z++) {
             const maxCoord = Math.pow(2, z);
             for (let x = 0; x < maxCoord; x++) {
                 for (let y = 0; y < maxCoord; y++) {
-                    const tilePath = `${frame.path}/512/${z}/${x}/${y}/2/1_1.png`;
+                    const tilePath = `${path}/512/${z}/${x}/${y}/${colorScheme}/1_1.png`;
                     if (!tileCache.has(tilePath) && !prefetchQueue.includes(tilePath)) {
                         prefetchQueue.push(tilePath);
                     }
                 }
             }
         }
-    });
+    }
+
+    if (metadata.radar && metadata.radar.past) {
+        metadata.radar.past.forEach(frame => enqueueTiles(frame.path, 2));
+    }
+    if (metadata.satellite && metadata.satellite.infrared) {
+        metadata.satellite.infrared.forEach(frame => enqueueTiles(frame.path, 0));
+    }
+
     processPrefetchQueue();
 }
 
@@ -137,6 +145,9 @@ function garbageCollectTiles(newMetadata) {
     const activePaths = new Set();
     if (newMetadata.radar && newMetadata.radar.past) {
         newMetadata.radar.past.forEach(frame => activePaths.add(frame.path));
+    }
+    if (newMetadata.satellite && newMetadata.satellite.infrared) {
+        newMetadata.satellite.infrared.forEach(frame => activePaths.add(frame.path));
     }
     
     let deletedCount = 0;
