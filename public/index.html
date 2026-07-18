@@ -466,7 +466,7 @@
             if (msg.type === 'history') {
                 lightningLayer.strikes = msg.data;
             } else if (msg.type === 'strike') {
-                lightningLayer.strikes.push({ lat: msg.lat, lon: msg.lon, timestamp: msg.timestamp });
+                lightningLayer.strikes.push({ lat: msg.lat, lon: msg.lon, timestamp: Date.now() });
                 const bounds = map.getBounds();
                 if (window.isLive && bounds.contains([msg.lat, msg.lon])) playStrikeSound();
             }
