@@ -12,6 +12,9 @@
             --text-main: #ffffff;
             --text-mute: #a1a1aa;
             --control-bg: #18181b;
+            --btn-bg: #18181b;
+            --btn-hover: #27272a;
+            --btn-active: #09090b;
         }
 
         :root.light-mode {
@@ -20,6 +23,9 @@
             --text-main: #09090b;
             --text-mute: #52525b;
             --control-bg: #f4f4f5;
+            --btn-bg: #f4f4f5;
+            --btn-hover: #e4e4e7;
+            --btn-active: #d4d4d8;
         }
 
         body, html { margin: 0; padding: 0; height: 100%; background: var(--bg-panel); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow: hidden; }
@@ -93,7 +99,7 @@
             height: 2px;
             background: #27272a;
             outline: none;
-            margin: 8px 0;
+            margin: 4px 0;
         }
         input[type="range"]::-webkit-slider-thumb {
             -webkit-appearance: none; width: 8px; height: 10px; background: var(--text-main); cursor: pointer; border-radius: 1px;
@@ -109,22 +115,23 @@
             background: var(--bg-panel);
             border: 1px solid var(--border-color);
             border-radius: 6px;
-            padding: 12px 16px;
+            padding: 8px 12px;
             z-index: 1000;
             display: flex;
             flex-direction: column;
-            gap: 8px;
+            gap: 6px;
+            color: var(--text-main);
             box-shadow: 0 4px 16px rgba(0, 0, 0, 0.6);
         }
         .timeline-top { display: flex; justify-content: space-between; align-items: center; }
         .play-controls { display: flex; gap: 8px; align-items: center; }
         
         .btn {
-            background: #18181b; border: 1px solid var(--border-color); color: var(--text-main);
+            background: var(--btn-bg); border: 1px solid var(--border-color); color: var(--text-main);
             padding: 4px 12px; border-radius: 4px; cursor: pointer; font-family: inherit; font-size: 11px; text-transform: uppercase;
         }
-        .btn:hover { background: #27272a; }
-        .btn:active { background: #09090b; }
+        .btn:hover { background: var(--btn-hover); }
+        .btn:active { background: var(--btn-active); }
         .pixelated-layer { image-rendering: pixelated; }
     </style>
 </head>
@@ -219,6 +226,26 @@
         const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
         let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
+        const savedSettings = ['layer-radar', 'layer-clouds', 'layer-lightning', 'layer-vectors', 'toggle-sound', 'toggle-theme'];
+        savedSettings.forEach(id => {
+            const el = document.getElementById(id);
+            const val = localStorage.getItem(id);
+            if (val !== null) el.checked = val === 'true';
+            el.addEventListener('change', () => localStorage.setItem(id, el.checked));
+        });
+
+        const savedAge = localStorage.getItem('lightning-age-slider');
+        if (savedAge !== null) {
+            document.getElementById('lightning-age-slider').value = savedAge;
+            document.getElementById('lightning-age-val').innerText = `${savedAge}m`;
+        }
+        document.getElementById('lightning-age-slider').addEventListener('change', (e) => localStorage.setItem('lightning-age-slider', e.target.value));
+
+        if (document.getElementById('toggle-theme').checked) {
+            document.documentElement.classList.add('light-mode');
+            baseLayer.setUrl('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png');
+        }
+
         document.getElementById('toggle-theme').addEventListener('change', (e) => {
             if (e.target.checked) {
                 document.documentElement.classList.add('light-mode');
@@ -237,7 +264,7 @@
 
         // Audio Engine
         let audioCtx = null;
-        let isSoundEnabled = false;
+        let isSoundEnabled = document.getElementById('toggle-sound').checked;
         document.getElementById('toggle-sound').addEventListener('change', (e) => {
             isSoundEnabled = e.target.checked;
             if (isSoundEnabled && !audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -321,6 +348,7 @@
                 const visiblePoints = [];
                 
                 // PASS 1: Draw Strikes
+                const isLight = document.documentElement.classList.contains('light-mode');
                 for (let i = 0; i < this.strikes.length; i++) {
                     const strike = this.strikes[i];
                     const age = now - strike.timestamp;
@@ -333,13 +361,22 @@
                     if (showVectors) visiblePoints.push({ x: pt.x, y: pt.y, lat: strike.lat, lon: strike.lon, age: age, timestamp: strike.timestamp });
 
                     const ratio = age / this.displayAgeMs;
-                    const g = Math.round(255 * (1 - ratio));
-                    const b = Math.round(255 * (1 - ratio));
+                    
+                    let r, g, b;
+                    if (isLight) {
+                        r = Math.round(255 * ratio);
+                        g = 0;
+                        b = 0;
+                    } else {
+                        r = 255;
+                        g = Math.round(255 * (1 - ratio));
+                        b = Math.round(255 * (1 - ratio));
+                    }
                     
                     ctx.font = 'bold 12px ui-monospace, monospace';
                     ctx.textAlign = 'center';
                     ctx.textBaseline = 'middle';
-                    ctx.fillStyle = `rgb(255, ${g}, ${b})`;
+                    ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
                     ctx.fillText('×', pt.x, pt.y);
 
                     if (window.isLive && age < 600) {
@@ -348,7 +385,7 @@
                         const alpha = 1 - Math.pow(animProgress, 2);
 
                         ctx.beginPath();
-                        ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
+                        ctx.strokeStyle = isLight ? `rgba(0, 0, 0, ${alpha})` : `rgba(255, 255, 255, ${alpha})`;
                         ctx.lineWidth = 0.5;
                         ctx.moveTo(pt.x - radius, pt.y - radius);
                         ctx.lineTo(pt.x + radius, pt.y + radius);
@@ -474,6 +511,9 @@
         });
 
         const lightningLayer = new LightningCanvasLayer().addTo(map);
+        if (savedAge !== null) {
+            lightningLayer.displayAgeMs = parseInt(savedAge) * 60 * 1000;
+        }
 
         setInterval(() => {
             const now = Date.now();
