@@ -563,7 +563,7 @@
                 }
 
                 if (!cloudLayers[activeCloud.path]) {
-                    const url = `/api/radar/tile${activeCloud.path}/512/{z}/{x}/{y}/0/1_1.png`;
+                    const url = `/api/radar/tile${activeCloud.path}/512/{z}/{x}/{y}/0/0_0.png`;
                     cloudLayers[activeCloud.path] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 3, transparent: true, className: 'pixelated-layer', zIndex: 5 }).addTo(map);
                 }
 
