@@ -7,16 +7,24 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
         :root {
-            --bg-panel: #121214;
-            --border-color: #27272a;
-            --text-main: #f4f4f5;
-            --text-mute: #71717a;
-            --control-bg: #1e1e2f;
+            --bg-panel: #000000;
+            --border-color: #3f3f46;
+            --text-main: #ffffff;
+            --text-mute: #a1a1aa;
+            --control-bg: #18181b;
         }
 
-        body, html { margin: 0; padding: 0; height: 100%; background: #09090b; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow: hidden; }
+        :root.light-mode {
+            --bg-panel: #ffffff;
+            --border-color: #d4d4d8;
+            --text-main: #09090b;
+            --text-mute: #52525b;
+            --control-bg: #f4f4f5;
+        }
+
+        body, html { margin: 0; padding: 0; height: 100%; background: var(--bg-panel); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow: hidden; }
         #map { height: 100vh; width: 100vw; }
-        .leaflet-container { background: #09090b; }
+        .leaflet-container { background: var(--bg-panel); }
         
         #logo {
             position: absolute;
@@ -165,6 +173,13 @@
                         <span class="slider"></span>
                     </label>
                 </div>
+                <div class="control-row">
+                    <span>Light Mode</span>
+                    <label class="switch">
+                        <input type="checkbox" id="toggle-theme">
+                        <span class="slider"></span>
+                    </label>
+                </div>
             </div>
 
             <div class="panel-section">
@@ -202,7 +217,17 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
         const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+        let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+
+        document.getElementById('toggle-theme').addEventListener('change', (e) => {
+            if (e.target.checked) {
+                document.documentElement.classList.add('light-mode');
+                baseLayer.setUrl('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png');
+            } else {
+                document.documentElement.classList.remove('light-mode');
+                baseLayer.setUrl('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png');
+            }
+        });
 
         document.getElementById('panel-tab').addEventListener('click', (e) => {
             const panel = document.getElementById('control-panel');
@@ -563,7 +588,7 @@
                 }
 
                 if (!cloudLayers[activeCloud.path]) {
-                    const url = `/api/radar/tile${activeCloud.path}/512/{z}/{x}/{y}/0/0_0.png`;
+                    const url = `/api/radar/tile${activeCloud.path}/256/{z}/{x}/{y}/0/0_0.png`;
                     cloudLayers[activeCloud.path] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 3, transparent: true, className: 'pixelated-layer', zIndex: 5 }).addTo(map);
                 }
 

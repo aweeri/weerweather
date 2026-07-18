@@ -100,12 +100,12 @@ async function processPrefetchQueue() {
 function queuePrefetch(metadata) {
     if (!metadata) return;
     
-    function enqueueTiles(path, colorScheme, options) {
+    function enqueueTiles(path, size, colorScheme, options) {
         for (let z = 0; z <= 3; z++) {
             const maxCoord = Math.pow(2, z);
             for (let x = 0; x < maxCoord; x++) {
                 for (let y = 0; y < maxCoord; y++) {
-                    const tilePath = `${path}/512/${z}/${x}/${y}/${colorScheme}/${options}.png`;
+                    const tilePath = `${path}/${size}/${z}/${x}/${y}/${colorScheme}/${options}.png`;
                     if (!tileCache.has(tilePath) && !prefetchQueue.includes(tilePath)) {
                         prefetchQueue.push(tilePath);
                     }
@@ -115,10 +115,10 @@ function queuePrefetch(metadata) {
     }
 
     if (metadata.radar && metadata.radar.past) {
-        metadata.radar.past.forEach(frame => enqueueTiles(frame.path, 2, '1_1'));
+        metadata.radar.past.forEach(frame => enqueueTiles(frame.path, 512, 2, '1_1'));
     }
     if (metadata.satellite && metadata.satellite.infrared) {
-        metadata.satellite.infrared.forEach(frame => enqueueTiles(frame.path, 0, '0_0'));
+        metadata.satellite.infrared.forEach(frame => enqueueTiles(frame.path, 256, 0, '0_0'));
     }
 
     processPrefetchQueue();
