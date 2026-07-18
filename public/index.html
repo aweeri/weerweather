@@ -531,7 +531,7 @@
 
             if (!radarLayers[activeFrame.path]) {
                 const url = `/api/radar/tile${activeFrame.path}/512/{z}/{x}/{y}/2/1_1.png`;
-                radarLayers[activeFrame.path] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 7, transparent: true }).addTo(map);
+                radarLayers[activeFrame.path] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 3, transparent: true }).addTo(map);
             }
 
             if (currentFramePath && currentFramePath !== activeFrame.path && radarLayers[currentFramePath]) {

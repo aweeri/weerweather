@@ -65,6 +65,57 @@ let metadataTimestamp = 0;
 const METADATA_TTL = 2 * 60 * 1000;
 const tileCache = new Map();
 
+let prefetchQueue = [];
+let isPrefetching = false;
+
+async function processPrefetchQueue() {
+    if (isPrefetching || prefetchQueue.length === 0) return;
+    isPrefetching = true;
+    
+    while (prefetchQueue.length > 0) {
+        const tilePath = prefetchQueue.shift();
+        if (!tileCache.has(tilePath)) {
+            try {
+                const targetUrl = `https://tilecache.rainviewer.com${tilePath}`;
+                const response = await fetch(targetUrl);
+                if (response.ok) {
+                    const contentType = response.headers.get('content-type') || 'image/png';
+                    const arrayBuffer = await response.arrayBuffer();
+                    const buffer = Buffer.from(arrayBuffer);
+                    tileCache.set(tilePath, { buffer, contentType });
+                } else if (response.status === 429) {
+                    prefetchQueue.unshift(tilePath);
+                    await new Promise(r => setTimeout(r, 5000));
+                    continue;
+                }
+            } catch (err) {
+                console.error('[Radar Cache] Prefetch error:', err.message);
+            }
+            await new Promise(r => setTimeout(r, 150));
+        }
+    }
+    isPrefetching = false;
+}
+
+function queuePrefetch(metadata) {
+    if (!metadata || !metadata.radar || !metadata.radar.past) return;
+    
+    metadata.radar.past.forEach(frame => {
+        for (let z = 0; z <= 3; z++) {
+            const maxCoord = Math.pow(2, z);
+            for (let x = 0; x < maxCoord; x++) {
+                for (let y = 0; y < maxCoord; y++) {
+                    const tilePath = `${frame.path}/512/${z}/${x}/${y}/2/1_1.png`;
+                    if (!tileCache.has(tilePath) && !prefetchQueue.includes(tilePath)) {
+                        prefetchQueue.push(tilePath);
+                    }
+                }
+            }
+        }
+    });
+    processPrefetchQueue();
+}
+
 async function getMetadata() {
     const now = Date.now();
     if (!metadataCache || (now - metadataTimestamp > METADATA_TTL)) {
@@ -73,6 +124,7 @@ async function getMetadata() {
             metadataCache = await response.json();
             metadataTimestamp = now;
             garbageCollectTiles(metadataCache);
+            queuePrefetch(metadataCache);
         } catch (err) {
             console.error('[Radar Cache] Error fetching metadata:', err.message);
             if (!metadataCache) throw err;
