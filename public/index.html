@@ -69,16 +69,10 @@
             user-select: none;
         }
         #panel-tab:hover { color: var(--text-main); }
-        #control-panel.collapsed { width: auto; }
         .collapsed #panel-body { display: none; }
-        .collapsed #panel-tab { border-bottom: none; text-align: center; }
+        .collapsed #panel-tab { border-bottom: none; }
 
         .panel-section { padding: 12px; border-bottom: 1px solid var(--border-color); }
-
-        @media (max-width: 600px) {
-            #unified-timeline-container { width: 95%; padding: 8px 12px; bottom: 12px; }
-            #control-panel { width: 200px; right: 12px; top: 12px; }
-        }
         .panel-section:last-child { border-bottom: none; }
         .section-header { color: var(--text-mute); margin-bottom: 8px; text-transform: uppercase; font-weight: bold; font-size: 9px; letter-spacing: 0.05em; }
         .control-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -282,12 +276,6 @@
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
         });
 
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && audioCtx && audioCtx.state === 'suspended' && isSoundEnabled) {
-                audioCtx.resume();
-            }
-        });
-
         function playStrikeSound() {
             if (!isSoundEnabled) return;
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -356,8 +344,8 @@
                 
                 if (!document.getElementById('layer-lightning').checked) return;
                 
-                const timeVisual = (window.isLive && !window.isPlaying) ? Date.now() : (window.unifiedTimeMs || Date.now());
-                if (window.isLive && !window.isPlaying) window.unifiedTimeMs = timeVisual;
+                const now = (window.isLive && !window.isPlaying) ? Date.now() : (window.unifiedTimeMs || Date.now());
+                if (window.isLive && !window.isPlaying) window.unifiedTimeMs = now;
                 const bounds = this._map.getBounds();
                 const south = bounds.getSouth();
                 const north = bounds.getNorth();
@@ -366,26 +354,21 @@
                 
                 const showVectors = document.getElementById('layer-vectors').checked;
                 const visiblePoints = [];
-                const realNow = Date.now();
                 
                 // PASS 1: Draw Strikes
                 const isLight = document.documentElement.classList.contains('light-mode');
                 for (let i = 0; i < this.strikes.length; i++) {
                     const strike = this.strikes[i];
-                    const ageVisual = timeVisual - strike.timestamp;
-                    const ageReal = realNow - strike.timestamp;
+                    const age = now - strike.timestamp;
                     
+                    if (age < 0 || age > this.displayAgeMs) continue;
                     if (strike.lat < south || strike.lat > north || strike.lon < west || strike.lon > east) continue;
                     
                     const pt = this._map.latLngToContainerPoint([strike.lat, strike.lon]);
                     
-                    if (ageReal >= 0 && ageReal <= this.displayAgeMs) {
-                        visiblePoints.push({ x: pt.x, y: pt.y, lat: strike.lat, lon: strike.lon, age: ageReal, timestamp: strike.timestamp });
-                    }
+                    if (showVectors) visiblePoints.push({ x: pt.x, y: pt.y, lat: strike.lat, lon: strike.lon, age: age, timestamp: strike.timestamp });
 
-                    if (window.isFuture || ageVisual < 0 || ageVisual > this.displayAgeMs) continue;
-
-                    const ratio = ageVisual / this.displayAgeMs;
+                    const ratio = age / this.displayAgeMs;
                     
                     let r, g, b;
                     if (isLight) {
@@ -404,8 +387,8 @@
                     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
                     ctx.fillText('×', pt.x, pt.y);
 
-                    if (window.isLive && ageVisual < 600) {
-                        const animProgress = ageVisual / 600;
+                    if (window.isLive && age < 600) {
+                        const animProgress = age / 600;
                         const radius = 40 * (1 - animProgress);
                         const alpha = 1 - Math.pow(animProgress, 2);
 
@@ -421,7 +404,7 @@
                 }
 
                 // PASS 2: Draw Storm Vectors ON TOP
-                if (visiblePoints.length > 0) {
+                if (showVectors && visiblePoints.length > 0) {
                     const clusters = [];
                     // Anchor clustering geographically (~35-40km radius) so it survives zooming
                     const CLUSTER_DEG_SQ = 0.35 * 0.35; 
@@ -489,11 +472,6 @@
                                 const angle = Math.atan2(dy, dx);
                                 const heading = getCompassHeading(angle);
                                 const label = `${heading} @ ${speedMPS.toFixed(1)} m/s`;
-                                
-                                c.latPerSec = (latlngN.lat - latlngO.lat) / timeDiffSec;
-                                c.lngPerSec = (latlngN.lng - latlngO.lng) / timeDiffSec;
-
-                                if (window.isFuture || !showVectors) return;
 
                                 // Draw Bounding Circle
                                 ctx.beginPath();
@@ -536,14 +514,6 @@
                             }
                         }
                     });
-
-                    const validClusters = clusters.filter(c => c.latPerSec !== undefined);
-                    if (validClusters.length > 0) {
-                        window.stormMotion = {
-                            latPerSec: validClusters.reduce((sum, c) => sum + c.latPerSec, 0) / validClusters.length,
-                            lngPerSec: validClusters.reduce((sum, c) => sum + c.lngPerSec, 0) / validClusters.length
-                        };
-                    }
                 }
             }
         });
@@ -569,27 +539,18 @@
         window.isLive = true;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsHost = window.location.port === '5500' ? 'localhost:3000' : window.location.host;
-        
-        let ws;
-        function connectWebSocket() {
-            ws = new WebSocket(`${protocol}//${wsHost}`);
+        const ws = new WebSocket(`${protocol}//${wsHost}`);
 
-            ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-                if (msg.type === 'history') {
-                    lightningLayer.strikes = msg.data;
-                } else if (msg.type === 'strike') {
-                    lightningLayer.strikes.push({ lat: msg.lat, lon: msg.lon, timestamp: Date.now() });
-                    const bounds = map.getBounds();
-                    if (window.isLive && bounds.contains([msg.lat, msg.lon])) playStrikeSound();
-                }
-            };
-
-            ws.onclose = () => {
-                setTimeout(connectWebSocket, 3000);
-            };
-        }
-        connectWebSocket();
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'history') {
+                lightningLayer.strikes = msg.data;
+            } else if (msg.type === 'strike') {
+                lightningLayer.strikes.push({ lat: msg.lat, lon: msg.lon, timestamp: Date.now() });
+                const bounds = map.getBounds();
+                if (window.isLive && bounds.contains([msg.lat, msg.lon])) playStrikeSound();
+            }
+        };
 
         // Radar & Unified Timeline Engine
         window.unifiedTimeMs = Date.now();
@@ -620,23 +581,17 @@
 
         function syncTimelineState() {
             const val = parseInt(uniTimeline.value);
-            const nowSec = Math.floor(Date.now() / 1000);
+            const max = parseInt(uniTimeline.max);
             
-            window.isLive = Math.abs(val - nowSec) <= 60;
-            window.isFuture = val > nowSec + 60;
+            window.isLive = (val >= max - 60);
 
             if (window.isLive && !window.isPlaying) {
                 window.unifiedTimeMs = Date.now();
                 uniStatus.innerText = 'LIVE';
                 uniStatus.style.color = '#10b981';
-            } else if (window.isFuture) {
-                window.unifiedTimeMs = val * 1000;
-                const minsFuture = Math.floor((val - nowSec) / 60);
-                uniStatus.innerText = `+${minsFuture} MIN`;
-                uniStatus.style.color = '#eab308';
             } else {
                 window.unifiedTimeMs = val * 1000;
-                const minsAgo = Math.floor((nowSec - val) / 60);
+                const minsAgo = Math.floor((max - val) / 60);
                 uniStatus.innerText = `-${minsAgo} MIN`;
                 uniStatus.style.color = 'var(--text-mute)';
             }
@@ -650,15 +605,10 @@
         function updateRadarVisuals() {
             if (radarFrames.length > 0) {
                 let activeFrame = radarFrames[0];
-                
-                if (window.isFuture) {
-                    activeFrame = radarFrames[radarFrames.length - 1];
-                } else {
-                    for (let i = 0; i < radarFrames.length; i++) {
-                        if (radarFrames[i].time <= window.unifiedTimeMs / 1000) {
-                            activeFrame = radarFrames[i];
-                        } else break;
-                    }
+                for (let i = 0; i < radarFrames.length; i++) {
+                    if (radarFrames[i].time <= window.unifiedTimeMs / 1000) {
+                        activeFrame = radarFrames[i];
+                    } else break;
                 }
 
                 if (!radarLayers[activeFrame.path]) {
@@ -668,50 +618,21 @@
 
                 if (currentFramePath && currentFramePath !== activeFrame.path && radarLayers[currentFramePath]) {
                     radarLayers[currentFramePath].setOpacity(0);
-                    const oldContainer = radarLayers[currentFramePath].getContainer();
-                    if (oldContainer) {
-                        oldContainer.style.transform = '';
-                        oldContainer.style.transition = 'none';
-                    }
                 }
 
                 currentFramePath = activeFrame.path;
-                const container = radarLayers[activeFrame.path].getContainer();
                 
                 if (layerRadarCheckbox.checked) {
                     radarLayers[activeFrame.path].setOpacity(0.65);
-                }
-
-                if (window.isFuture && window.stormMotion && container) {
-                    const futureSeconds = (window.unifiedTimeMs / 1000) - activeFrame.time;
-                    const center = map.getCenter();
-                    const centerPt = map.latLngToContainerPoint(center);
-                    const futureLat = center.lat + (window.stormMotion.latPerSec * futureSeconds);
-                    const futureLng = center.lng + (window.stormMotion.lngPerSec * futureSeconds);
-                    const futurePt = map.latLngToContainerPoint([futureLat, futureLng]);
-                    
-                    const offsetX = futurePt.x - centerPt.x;
-                    const offsetY = futurePt.y - centerPt.y;
-                    
-                    container.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
-                    container.style.transition = 'transform 0.1s linear';
-                } else if (container) {
-                    container.style.transform = '';
-                    container.style.transition = 'none';
                 }
             }
 
             if (cloudFrames.length > 0) {
                 let activeCloud = cloudFrames[0];
-                
-                if (window.isFuture) {
-                    activeCloud = cloudFrames[cloudFrames.length - 1];
-                } else {
-                    for (let i = 0; i < cloudFrames.length; i++) {
-                        if (cloudFrames[i].time <= window.unifiedTimeMs / 1000) {
-                            activeCloud = cloudFrames[i];
-                        } else break;
-                    }
+                for (let i = 0; i < cloudFrames.length; i++) {
+                    if (cloudFrames[i].time <= window.unifiedTimeMs / 1000) {
+                        activeCloud = cloudFrames[i];
+                    } else break;
                 }
 
                 if (!cloudLayers[activeCloud.path]) {
@@ -721,36 +642,12 @@
 
                 if (currentCloudFramePath && currentCloudFramePath !== activeCloud.path && cloudLayers[currentCloudFramePath]) {
                     cloudLayers[currentCloudFramePath].setOpacity(0);
-                    const oldContainer = cloudLayers[currentCloudFramePath].getContainer();
-                    if (oldContainer) {
-                        oldContainer.style.transform = '';
-                        oldContainer.style.transition = 'none';
-                    }
                 }
 
                 currentCloudFramePath = activeCloud.path;
-                const cloudContainer = cloudLayers[activeCloud.path].getContainer();
                 
                 if (layerCloudsCheckbox.checked) {
                     cloudLayers[activeCloud.path].setOpacity(0.4);
-                }
-
-                if (window.isFuture && window.stormMotion && cloudContainer) {
-                    const futureSeconds = (window.unifiedTimeMs / 1000) - activeCloud.time;
-                    const center = map.getCenter();
-                    const centerPt = map.latLngToContainerPoint(center);
-                    const futureLat = center.lat + (window.stormMotion.latPerSec * futureSeconds);
-                    const futureLng = center.lng + (window.stormMotion.lngPerSec * futureSeconds);
-                    const futurePt = map.latLngToContainerPoint([futureLat, futureLng]);
-                    
-                    const offsetX = futurePt.x - centerPt.x;
-                    const offsetY = futurePt.y - centerPt.y;
-                    
-                    cloudContainer.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
-                    cloudContainer.style.transition = 'transform 0.1s linear';
-                } else if (cloudContainer) {
-                    cloudContainer.style.transform = '';
-                    cloudContainer.style.transition = 'none';
                 }
             }
         }
@@ -770,7 +667,7 @@
                     const maxTime = Math.floor(Date.now() / 1000);
                     
                     uniTimeline.min = minTime;
-                    uniTimeline.max = maxTime + 3600;
+                    uniTimeline.max = maxTime;
                     uniTimeline.value = maxTime;
                     uniTimeline.disabled = false;
                     playBtn.disabled = false;
@@ -778,11 +675,10 @@
                     
                     syncTimelineState();
                 } else if (newFrames[newFrames.length - 1].time > radarFrames[radarFrames.length - 1].time) {
-                    const wasLive = window.isLive && !window.isPlaying;
+                    const wasLive = parseInt(uniTimeline.value) >= parseInt(uniTimeline.max) - 60;
                     radarFrames = newFrames;
                     cloudFrames = newClouds;
-                    const nowSec = Math.floor(Date.now() / 1000);
-                    uniTimeline.max = nowSec + 3600;
+                    uniTimeline.max = Math.floor(Date.now() / 1000);
                     
                     const activePaths = radarFrames.map(f => f.path);
                     for (const path in radarLayers) {
@@ -800,8 +696,8 @@
                         }
                     }
 
-                    if (wasLive) {
-                        uniTimeline.value = nowSec;
+                    if (wasLive && !window.isPlaying) {
+                        uniTimeline.value = uniTimeline.max;
                         syncTimelineState();
                     }
                 }
@@ -814,7 +710,7 @@
         setInterval(() => {
             if (radarFrames.length > 0) {
                 const nowSec = Math.floor(Date.now() / 1000);
-                uniTimeline.max = nowSec + 3600;
+                uniTimeline.max = nowSec;
                 if (window.isLive && !window.isPlaying) {
                     uniTimeline.value = nowSec;
                     window.unifiedTimeMs = Date.now();
@@ -824,10 +720,6 @@
             }
         }, 1000);
         setInterval(fetchRadarData, 120000);
-
-        map.on('zoom move', () => {
-            if (window.isFuture) updateRadarVisuals();
-        });
 
         uniTimeline.addEventListener('input', () => {
             if (window.isPlaying) stopLoop();
