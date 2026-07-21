@@ -133,6 +133,13 @@
         .btn:hover { background: var(--btn-hover); }
         .btn:active { background: var(--btn-active); }
         .pixelated-layer { image-rendering: pixelated; }
+        
+        .timeline-wrapper { position: relative; width: 100%; margin: 6px 0 2px 0; display: flex; align-items: center; }
+        #now-marker {
+            position: absolute; top: -4px; bottom: -4px; width: 2px;
+            background: #10b981; pointer-events: none; z-index: 5;
+            box-shadow: 0 0 4px #10b981; display: none;
+        }
     </style>
 </head>
 <body>
@@ -214,11 +221,15 @@
             <div class="play-controls">
                 <button id="uni-play-btn" class="btn" disabled>▶ Play</button>
                 <button id="uni-speed-btn" class="btn" disabled>1x</button>
+                <button id="uni-live-btn" class="btn" disabled>LIVE</button>
             </div>
             <div style="font-size: 14px; font-weight: bold; letter-spacing: 0.05em;" id="uni-timestamp">--:--</div>
             <div style="font-size: 11px; color: var(--text-mute);" id="uni-status">LIVE</div>
         </div>
-        <input type="range" id="uni-timeline" min="0" max="0" value="0" step="60" disabled>
+        <div class="timeline-wrapper">
+            <div id="now-marker"></div>
+            <input type="range" id="uni-timeline" min="0" max="0" value="0" step="60" disabled>
+        </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -565,6 +576,8 @@
         const uniStatus = document.getElementById('uni-status');
         const playBtn = document.getElementById('uni-play-btn');
         const speedBtn = document.getElementById('uni-speed-btn');
+        const liveBtn = document.getElementById('uni-live-btn');
+        const nowMarker = document.getElementById('now-marker');
         const layerRadarCheckbox = document.getElementById('layer-radar');
         const layerCloudsCheckbox = document.getElementById('layer-clouds');
 
@@ -578,6 +591,20 @@
             { label: '2x', tickMs: 50, stepSec: 60 },
             { label: '0.5x', tickMs: 200, stepSec: 60 }
         ];
+
+        function updateMarker() {
+            const min = parseInt(uniTimeline.min);
+            const max = parseInt(uniTimeline.max);
+            if (max <= min) return;
+            const nowSec = Math.floor(Date.now() / 1000);
+            let pct = (nowSec - min) / (max - min);
+            if (pct >= 0 && pct <= 1) {
+                nowMarker.style.display = 'block';
+                nowMarker.style.left = `calc(${pct * 100}% - 1px)`;
+            } else {
+                nowMarker.style.display = 'none';
+            }
+        }
 
         function syncTimelineState() {
             const val = parseInt(uniTimeline.value);
@@ -604,6 +631,7 @@
             const date = new Date(window.unifiedTimeMs);
             uniTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
+            updateMarker();
             updateRadarVisuals();
         }
 
@@ -679,6 +707,7 @@
                     uniTimeline.disabled = false;
                     playBtn.disabled = false;
                     speedBtn.disabled = false;
+                    liveBtn.disabled = false;
                     
                     syncTimelineState();
                 } else if (newFrames[newFrames.length - 1].time > radarFrames[radarFrames.length - 1].time) {
@@ -782,6 +811,16 @@
             speedBtn.innerText = speeds[currentSpeedIdx].label;
             if (window.isPlaying) runLoop(); 
         });
+
+        liveBtn.addEventListener('click', () => {
+            if (window.isPlaying) stopLoop();
+            uniTimeline.value = Math.floor(Date.now() / 1000);
+            syncTimelineState();
+        });
+
+        setInterval(() => {
+            if (radarFrames.length > 0) updateMarker();
+        }, 10000);
     </script>
 </body>
 </html>
