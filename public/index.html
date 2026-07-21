@@ -356,8 +356,8 @@
                 
                 if (!document.getElementById('layer-lightning').checked) return;
                 
-                const now = (window.isLive && !window.isPlaying) ? Date.now() : (window.unifiedTimeMs || Date.now());
-                if (window.isLive && !window.isPlaying) window.unifiedTimeMs = now;
+                const timeVisual = (window.isLive && !window.isPlaying) ? Date.now() : (window.unifiedTimeMs || Date.now());
+                if (window.isLive && !window.isPlaying) window.unifiedTimeMs = timeVisual;
                 const bounds = this._map.getBounds();
                 const south = bounds.getSouth();
                 const north = bounds.getNorth();
@@ -366,21 +366,26 @@
                 
                 const showVectors = document.getElementById('layer-vectors').checked;
                 const visiblePoints = [];
+                const realNow = Date.now();
                 
                 // PASS 1: Draw Strikes
                 const isLight = document.documentElement.classList.contains('light-mode');
                 for (let i = 0; i < this.strikes.length; i++) {
                     const strike = this.strikes[i];
-                    const age = now - strike.timestamp;
+                    const ageVisual = timeVisual - strike.timestamp;
+                    const ageReal = realNow - strike.timestamp;
                     
-                    if (age < 0 || age > this.displayAgeMs) continue;
                     if (strike.lat < south || strike.lat > north || strike.lon < west || strike.lon > east) continue;
                     
                     const pt = this._map.latLngToContainerPoint([strike.lat, strike.lon]);
                     
-                    if (showVectors) visiblePoints.push({ x: pt.x, y: pt.y, lat: strike.lat, lon: strike.lon, age: age, timestamp: strike.timestamp });
+                    if (showVectors && ageReal >= 0 && ageReal <= this.displayAgeMs) {
+                        visiblePoints.push({ x: pt.x, y: pt.y, lat: strike.lat, lon: strike.lon, age: ageReal, timestamp: strike.timestamp });
+                    }
 
-                    const ratio = age / this.displayAgeMs;
+                    if (window.isFuture || ageVisual < 0 || ageVisual > this.displayAgeMs) continue;
+
+                    const ratio = ageVisual / this.displayAgeMs;
                     
                     let r, g, b;
                     if (isLight) {
@@ -399,8 +404,8 @@
                     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
                     ctx.fillText('×', pt.x, pt.y);
 
-                    if (window.isLive && age < 600) {
-                        const animProgress = age / 600;
+                    if (window.isLive && ageVisual < 600) {
+                        const animProgress = ageVisual / 600;
                         const radius = 40 * (1 - animProgress);
                         const alpha = 1 - Math.pow(animProgress, 2);
 
@@ -484,6 +489,11 @@
                                 const angle = Math.atan2(dy, dx);
                                 const heading = getCompassHeading(angle);
                                 const label = `${heading} @ ${speedMPS.toFixed(1)} m/s`;
+                                
+                                c.latPerSec = (latlngN.lat - latlngO.lat) / timeDiffSec;
+                                c.lngPerSec = (latlngN.lng - latlngO.lng) / timeDiffSec;
+
+                                if (window.isFuture) return;
 
                                 // Draw Bounding Circle
                                 ctx.beginPath();
@@ -526,6 +536,14 @@
                             }
                         }
                     });
+
+                    const validClusters = clusters.filter(c => c.latPerSec !== undefined);
+                    if (validClusters.length > 0) {
+                        window.stormMotion = {
+                            latPerSec: validClusters.reduce((sum, c) => sum + c.latPerSec, 0) / validClusters.length,
+                            lngPerSec: validClusters.reduce((sum, c) => sum + c.lngPerSec, 0) / validClusters.length
+                        };
+                    }
                 }
             }
         });
@@ -602,17 +620,23 @@
 
         function syncTimelineState() {
             const val = parseInt(uniTimeline.value);
-            const max = parseInt(uniTimeline.max);
+            const nowSec = Math.floor(Date.now() / 1000);
             
-            window.isLive = (val >= max - 60);
+            window.isLive = Math.abs(val - nowSec) <= 60;
+            window.isFuture = val > nowSec + 60;
 
             if (window.isLive && !window.isPlaying) {
                 window.unifiedTimeMs = Date.now();
                 uniStatus.innerText = 'LIVE';
                 uniStatus.style.color = '#10b981';
+            } else if (window.isFuture) {
+                window.unifiedTimeMs = val * 1000;
+                const minsFuture = Math.floor((val - nowSec) / 60);
+                uniStatus.innerText = `+${minsFuture} MIN`;
+                uniStatus.style.color = '#eab308';
             } else {
                 window.unifiedTimeMs = val * 1000;
-                const minsAgo = Math.floor((max - val) / 60);
+                const minsAgo = Math.floor((nowSec - val) / 60);
                 uniStatus.innerText = `-${minsAgo} MIN`;
                 uniStatus.style.color = 'var(--text-mute)';
             }
@@ -626,10 +650,15 @@
         function updateRadarVisuals() {
             if (radarFrames.length > 0) {
                 let activeFrame = radarFrames[0];
-                for (let i = 0; i < radarFrames.length; i++) {
-                    if (radarFrames[i].time <= window.unifiedTimeMs / 1000) {
-                        activeFrame = radarFrames[i];
-                    } else break;
+                
+                if (window.isFuture) {
+                    activeFrame = radarFrames[radarFrames.length - 1];
+                } else {
+                    for (let i = 0; i < radarFrames.length; i++) {
+                        if (radarFrames[i].time <= window.unifiedTimeMs / 1000) {
+                            activeFrame = radarFrames[i];
+                        } else break;
+                    }
                 }
 
                 if (!radarLayers[activeFrame.path]) {
@@ -639,12 +668,36 @@
 
                 if (currentFramePath && currentFramePath !== activeFrame.path && radarLayers[currentFramePath]) {
                     radarLayers[currentFramePath].setOpacity(0);
+                    const oldContainer = radarLayers[currentFramePath].getContainer();
+                    if (oldContainer) {
+                        oldContainer.style.transform = '';
+                        oldContainer.style.transition = 'none';
+                    }
                 }
 
                 currentFramePath = activeFrame.path;
+                const container = radarLayers[activeFrame.path].getContainer();
                 
                 if (layerRadarCheckbox.checked) {
                     radarLayers[activeFrame.path].setOpacity(0.65);
+                }
+
+                if (window.isFuture && window.stormMotion && container) {
+                    const futureSeconds = (window.unifiedTimeMs / 1000) - activeFrame.time;
+                    const center = map.getCenter();
+                    const centerPt = map.latLngToContainerPoint(center);
+                    const futureLat = center.lat + (window.stormMotion.latPerSec * futureSeconds);
+                    const futureLng = center.lng + (window.stormMotion.lngPerSec * futureSeconds);
+                    const futurePt = map.latLngToContainerPoint([futureLat, futureLng]);
+                    
+                    const offsetX = futurePt.x - centerPt.x;
+                    const offsetY = futurePt.y - centerPt.y;
+                    
+                    container.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+                    container.style.transition = 'transform 0.1s linear';
+                } else if (container) {
+                    container.style.transform = '';
+                    container.style.transition = 'none';
                 }
             }
 
@@ -688,7 +741,7 @@
                     const maxTime = Math.floor(Date.now() / 1000);
                     
                     uniTimeline.min = minTime;
-                    uniTimeline.max = maxTime;
+                    uniTimeline.max = maxTime + 3600;
                     uniTimeline.value = maxTime;
                     uniTimeline.disabled = false;
                     playBtn.disabled = false;
@@ -696,10 +749,11 @@
                     
                     syncTimelineState();
                 } else if (newFrames[newFrames.length - 1].time > radarFrames[radarFrames.length - 1].time) {
-                    const wasLive = parseInt(uniTimeline.value) >= parseInt(uniTimeline.max) - 60;
+                    const wasLive = window.isLive && !window.isPlaying;
                     radarFrames = newFrames;
                     cloudFrames = newClouds;
-                    uniTimeline.max = Math.floor(Date.now() / 1000);
+                    const nowSec = Math.floor(Date.now() / 1000);
+                    uniTimeline.max = nowSec + 3600;
                     
                     const activePaths = radarFrames.map(f => f.path);
                     for (const path in radarLayers) {
@@ -717,8 +771,8 @@
                         }
                     }
 
-                    if (wasLive && !window.isPlaying) {
-                        uniTimeline.value = uniTimeline.max;
+                    if (wasLive) {
+                        uniTimeline.value = nowSec;
                         syncTimelineState();
                     }
                 }
@@ -731,7 +785,7 @@
         setInterval(() => {
             if (radarFrames.length > 0) {
                 const nowSec = Math.floor(Date.now() / 1000);
-                uniTimeline.max = nowSec;
+                uniTimeline.max = nowSec + 3600;
                 if (window.isLive && !window.isPlaying) {
                     uniTimeline.value = nowSec;
                     window.unifiedTimeMs = Date.now();
@@ -741,6 +795,10 @@
             }
         }, 1000);
         setInterval(fetchRadarData, 120000);
+
+        map.on('zoom move', () => {
+            if (window.isFuture) updateRadarVisuals();
+        });
 
         uniTimeline.addEventListener('input', () => {
             if (window.isPlaying) stopLoop();
