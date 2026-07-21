@@ -591,8 +591,8 @@
                     return canvas;
                 }
 
-                const urlT = `/api/radar/tile${pathT}/512/${coords.z}/${coords.x}/${coords.y}/2/1_1.png`;
-                const urlT1 = `/api/radar/tile${pathT1}/512/${coords.z}/${coords.x}/${coords.y}/2/1_1.png`;
+                const urlT = `/api/radar/tile${pathT}/256/${coords.z}/${coords.x}/${coords.y}/2/1_1.png`;
+                const urlT1 = `/api/radar/tile${pathT1}/256/${coords.z}/${coords.x}/${coords.y}/2/1_1.png`;
 
                 let imgT = new Image(); let imgT1 = new Image();
                 let loaded = 0;
@@ -601,40 +601,47 @@
                     loaded++;
                     if (loaded === 2) {
                         try {
+                            const scale = 4;
+                            const workX = Math.floor(size.x / scale);
+                            const workY = Math.floor(size.y / scale);
+
                             const cT = document.createElement('canvas'); const cT1 = document.createElement('canvas');
-                            cT.width = cT1.width = size.x; cT.height = cT1.height = size.y;
+                            cT.width = cT1.width = workX; cT.height = cT1.height = workY;
                             const ctxT = cT.getContext('2d', { willReadFrequently: true });
                             const ctxT1 = cT1.getContext('2d', { willReadFrequently: true });
-                            ctxT.drawImage(imgT, 0, 0); ctxT1.drawImage(imgT1, 0, 0);
                             
-                            const dataT = ctxT.getImageData(0, 0, size.x, size.y);
-                            const dataT1 = ctxT1.getImageData(0, 0, size.x, size.y);
-                            const outData = ctx.createImageData(size.x, size.y);
+                            ctxT.imageSmoothingEnabled = false; ctxT1.imageSmoothingEnabled = false;
+                            ctxT.drawImage(imgT, 0, 0, workX, workY); 
+                            ctxT1.drawImage(imgT1, 0, 0, workX, workY);
                             
-                            const blockSize = 32; const searchRange = 16; const vectors = {}; 
+                            const dataT = ctxT.getImageData(0, 0, workX, workY);
+                            const dataT1 = ctxT1.getImageData(0, 0, workX, workY);
+                            const outData = ctx.createImageData(workX, workY);
+                            
+                            const blockSize = 16; const searchRange = 6; const vectors = {}; 
                             
                             const getVal = (data, x, y) => {
-                                if (x < 0 || y < 0 || x >= size.x || y >= size.y) return 0;
-                                const i = (y * size.x + x) * 4;
+                                if (x < 0 || y < 0 || x >= workX || y >= workY) return 0;
+                                const i = (y * workX + x) * 4;
                                 return data[i+3] > 0 ? data[i] + data[i+1] + data[i+2] : 0; 
                             };
 
-                            for (let by = 0; by < size.y; by += blockSize) {
-                                for (let bx = 0; bx < size.x; bx += blockSize) {
+                            for (let by = 0; by < workY; by += blockSize) {
+                                for (let bx = 0; bx < workX; bx += blockSize) {
                                     let bestSAD = Infinity; let bestU = 0, bestV = 0;
                                     let hasData = false;
-                                    for(let py = 0; py < blockSize; py += 8) {
-                                        for(let px = 0; px < blockSize; px += 8) {
+                                    for(let py = 0; py < blockSize; py += 2) {
+                                        for(let px = 0; px < blockSize; px += 2) {
                                             if (getVal(dataT.data, bx + px, by + py) > 0) hasData = true;
                                         }
                                     }
 
                                     if (hasData) {
-                                        for (let v = -searchRange; v <= searchRange; v += 2) {
-                                            for (let u = -searchRange; u <= searchRange; u += 2) {
+                                        for (let v = -searchRange; v <= searchRange; v++) {
+                                            for (let u = -searchRange; u <= searchRange; u++) {
                                                 let sad = 0;
-                                                for (let y = 0; y < blockSize; y += 4) {
-                                                    for (let x = 0; x < blockSize; x += 4) {
+                                                for (let y = 0; y < blockSize; y += 2) {
+                                                    for (let x = 0; x < blockSize; x += 2) {
                                                         sad += Math.abs(getVal(dataT.data, bx + x, by + y) - getVal(dataT1.data, bx + x + u, by + y + v));
                                                     }
                                                 }
@@ -646,8 +653,8 @@
                                 }
                             }
 
-                            for (let y = 0; y < size.y; y++) {
-                                for (let x = 0; x < size.x; x++) {
+                            for (let y = 0; y < workY; y++) {
+                                for (let x = 0; x < workX; x++) {
                                     const bx = Math.floor(x / blockSize) * blockSize;
                                     const by = Math.floor(y / blockSize) * blockSize;
                                     const vec = vectors[`${bx},${by}`] || { u: 0, v: 0 };
@@ -655,9 +662,9 @@
                                     const srcX = Math.round(x + vec.u * progress);
                                     const srcY = Math.round(y + vec.v * progress);
                                     
-                                    if (srcX >= 0 && srcX < size.x && srcY >= 0 && srcY < size.y) {
-                                        const dstIdx = (y * size.x + x) * 4;
-                                        const srcIdx = (srcY * size.x + srcX) * 4;
+                                    if (srcX >= 0 && srcX < workX && srcY >= 0 && srcY < workY) {
+                                        const dstIdx = (y * workX + x) * 4;
+                                        const srcIdx = (srcY * workX + srcX) * 4;
                                         outData.data[dstIdx] = dataT.data[srcIdx];
                                         outData.data[dstIdx+1] = dataT.data[srcIdx+1];
                                         outData.data[dstIdx+2] = dataT.data[srcIdx+2];
@@ -665,7 +672,13 @@
                                     }
                                 }
                             }
-                            ctx.putImageData(outData, 0, 0);
+                            
+                            const tempC = document.createElement('canvas');
+                            tempC.width = workX; tempC.height = workY;
+                            tempC.getContext('2d').putImageData(outData, 0, 0);
+                            
+                            ctx.imageSmoothingEnabled = false;
+                            ctx.drawImage(tempC, 0, 0, size.x, size.y);
                             done(null, canvas);
                         } catch (e) { done(e, canvas); }
                     }
