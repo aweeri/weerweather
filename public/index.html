@@ -69,16 +69,10 @@
             user-select: none;
         }
         #panel-tab:hover { color: var(--text-main); }
-        #control-panel.collapsed { width: auto; }
         .collapsed #panel-body { display: none; }
-        .collapsed #panel-tab { border-bottom: none; text-align: center; }
+        .collapsed #panel-tab { border-bottom: none; }
 
         .panel-section { padding: 12px; border-bottom: 1px solid var(--border-color); }
-
-        @media (max-width: 600px) {
-            #unified-timeline-container { width: 95%; padding: 8px 12px; bottom: 12px; }
-            #control-panel { width: 200px; right: 12px; top: 12px; }
-        }
         .panel-section:last-child { border-bottom: none; }
         .section-header { color: var(--text-mute); margin-bottom: 8px; text-transform: uppercase; font-weight: bold; font-size: 9px; letter-spacing: 0.05em; }
         .control-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
@@ -139,13 +133,6 @@
         .btn:hover { background: var(--btn-hover); }
         .btn:active { background: var(--btn-active); }
         .pixelated-layer { image-rendering: pixelated; }
-
-        .timeline-wrapper { position: relative; width: 100%; margin: 6px 0 2px 0; display: flex; align-items: center; }
-        #now-marker {
-            position: absolute; top: -4px; bottom: -4px; width: 2px;
-            background: #10b981; pointer-events: none; z-index: 5;
-            box-shadow: 0 0 4px #10b981; display: none;
-        }
     </style>
 </head>
 <body>
@@ -227,15 +214,11 @@
             <div class="play-controls">
                 <button id="uni-play-btn" class="btn" disabled>▶ Play</button>
                 <button id="uni-speed-btn" class="btn" disabled>1x</button>
-                <button id="uni-live-btn" class="btn" disabled>LIVE</button>
             </div>
             <div style="font-size: 14px; font-weight: bold; letter-spacing: 0.05em;" id="uni-timestamp">--:--</div>
             <div style="font-size: 11px; color: var(--text-mute);" id="uni-status">LIVE</div>
         </div>
-        <div class="timeline-wrapper">
-            <div id="now-marker"></div>
-            <input type="range" id="uni-timeline" min="0" max="0" value="0" step="60" disabled>
-        </div>
+        <input type="range" id="uni-timeline" min="0" max="0" value="0" step="60" disabled>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -291,12 +274,6 @@
         document.body.addEventListener('click', () => {
             if (isSoundEnabled && !audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume();
-        });
-
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden && audioCtx && audioCtx.state === 'suspended' && isSoundEnabled) {
-                audioCtx.resume();
-            }
         });
 
         function playStrikeSound() {
@@ -367,8 +344,8 @@
                 
                 if (!document.getElementById('layer-lightning').checked) return;
                 
-                const timeVisual = (window.isLive && !window.isPlaying) ? Date.now() : (window.unifiedTimeMs || Date.now());
-                if (window.isLive && !window.isPlaying) window.unifiedTimeMs = timeVisual;
+                const now = (window.isLive && !window.isPlaying) ? Date.now() : (window.unifiedTimeMs || Date.now());
+                if (window.isLive && !window.isPlaying) window.unifiedTimeMs = now;
                 const bounds = this._map.getBounds();
                 const south = bounds.getSouth();
                 const north = bounds.getNorth();
@@ -377,26 +354,21 @@
                 
                 const showVectors = document.getElementById('layer-vectors').checked;
                 const visiblePoints = [];
-                const realNow = Date.now();
                 
                 // PASS 1: Draw Strikes
                 const isLight = document.documentElement.classList.contains('light-mode');
                 for (let i = 0; i < this.strikes.length; i++) {
                     const strike = this.strikes[i];
-                    const ageVisual = timeVisual - strike.timestamp;
-                    const ageReal = realNow - strike.timestamp;
+                    const age = now - strike.timestamp;
                     
+                    if (age < 0 || age > this.displayAgeMs) continue;
                     if (strike.lat < south || strike.lat > north || strike.lon < west || strike.lon > east) continue;
                     
                     const pt = this._map.latLngToContainerPoint([strike.lat, strike.lon]);
                     
-                    if (ageReal >= 0 && ageReal <= this.displayAgeMs) {
-                        visiblePoints.push({ x: pt.x, y: pt.y, lat: strike.lat, lon: strike.lon, age: ageReal, timestamp: strike.timestamp });
-                    }
+                    if (showVectors) visiblePoints.push({ x: pt.x, y: pt.y, lat: strike.lat, lon: strike.lon, age: age, timestamp: strike.timestamp });
 
-                    if (window.isFuture || ageVisual < 0 || ageVisual > this.displayAgeMs) continue;
-
-                    const ratio = ageVisual / this.displayAgeMs;
+                    const ratio = age / this.displayAgeMs;
                     
                     let r, g, b;
                     if (isLight) {
@@ -415,8 +387,8 @@
                     ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
                     ctx.fillText('×', pt.x, pt.y);
 
-                    if (window.isLive && ageVisual < 600) {
-                        const animProgress = ageVisual / 600;
+                    if (window.isLive && age < 600) {
+                        const animProgress = age / 600;
                         const radius = 40 * (1 - animProgress);
                         const alpha = 1 - Math.pow(animProgress, 2);
 
@@ -432,7 +404,7 @@
                 }
 
                 // PASS 2: Draw Storm Vectors ON TOP
-                if (visiblePoints.length > 0) {
+                if (showVectors && visiblePoints.length > 0) {
                     const clusters = [];
                     // Anchor clustering geographically (~35-40km radius) so it survives zooming
                     const CLUSTER_DEG_SQ = 0.35 * 0.35; 
@@ -500,11 +472,6 @@
                                 const angle = Math.atan2(dy, dx);
                                 const heading = getCompassHeading(angle);
                                 const label = `${heading} @ ${speedMPS.toFixed(1)} m/s`;
-                                
-                                c.latPerSec = (latlngN.lat - latlngO.lat) / timeDiffSec;
-                                c.lngPerSec = (latlngN.lng - latlngO.lng) / timeDiffSec;
-
-                                if (window.isFuture || !showVectors) return;
 
                                 // Draw Bounding Circle
                                 ctx.beginPath();
@@ -547,14 +514,6 @@
                             }
                         }
                     });
-
-                    const validClusters = clusters.filter(c => c.latPerSec !== undefined);
-                    if (validClusters.length > 0) {
-                        window.stormMotion = {
-                            latPerSec: validClusters.reduce((sum, c) => sum + c.latPerSec, 0) / validClusters.length,
-                            lngPerSec: validClusters.reduce((sum, c) => sum + c.lngPerSec, 0) / validClusters.length
-                        };
-                    }
                 }
             }
         });
@@ -576,146 +535,22 @@
             lightningLayer.displayAgeMs = parseInt(e.target.value) * 60 * 1000;
         });
 
-        // Client-Side Optical Flow Block-Matching Advection Engine
-        const OpticalFlowLayer = L.GridLayer.extend({
-            createTile: function(coords, done) {
-                const canvas = L.DomUtil.create('canvas', 'leaflet-tile');
-                const size = this.getTileSize();
-                canvas.width = size.x;
-                canvas.height = size.y;
-                const ctx = canvas.getContext('2d', { willReadFrequently: true });
-
-                const { pathT, pathT1, progress } = this.options;
-                if (!pathT || !pathT1 || progress <= 0) {
-                    setTimeout(() => done(null, canvas), 0);
-                    return canvas;
-                }
-
-                const urlT = `/api/radar/tile${pathT}/256/${coords.z}/${coords.x}/${coords.y}/2/1_1.png`;
-                const urlT1 = `/api/radar/tile${pathT1}/256/${coords.z}/${coords.x}/${coords.y}/2/1_1.png`;
-
-                let imgT = new Image(); let imgT1 = new Image();
-                let loaded = 0;
-
-                const onload = () => {
-                    loaded++;
-                    if (loaded === 2) {
-                        try {
-                            const scale = 4;
-                            const workX = Math.floor(size.x / scale);
-                            const workY = Math.floor(size.y / scale);
-
-                            const cT = document.createElement('canvas'); const cT1 = document.createElement('canvas');
-                            cT.width = cT1.width = workX; cT.height = cT1.height = workY;
-                            const ctxT = cT.getContext('2d', { willReadFrequently: true });
-                            const ctxT1 = cT1.getContext('2d', { willReadFrequently: true });
-                            
-                            ctxT.imageSmoothingEnabled = false; ctxT1.imageSmoothingEnabled = false;
-                            ctxT.drawImage(imgT, 0, 0, workX, workY); 
-                            ctxT1.drawImage(imgT1, 0, 0, workX, workY);
-                            
-                            const dataT = ctxT.getImageData(0, 0, workX, workY);
-                            const dataT1 = ctxT1.getImageData(0, 0, workX, workY);
-                            const outData = ctx.createImageData(workX, workY);
-                            
-                            const blockSize = 16; const searchRange = 6; const vectors = {}; 
-                            
-                            const getVal = (data, x, y) => {
-                                if (x < 0 || y < 0 || x >= workX || y >= workY) return 0;
-                                const i = (y * workX + x) * 4;
-                                return data[i+3] > 0 ? data[i] + data[i+1] + data[i+2] : 0; 
-                            };
-
-                            for (let by = 0; by < workY; by += blockSize) {
-                                for (let bx = 0; bx < workX; bx += blockSize) {
-                                    let bestSAD = Infinity; let bestU = 0, bestV = 0;
-                                    let hasData = false;
-                                    for(let py = 0; py < blockSize; py += 2) {
-                                        for(let px = 0; px < blockSize; px += 2) {
-                                            if (getVal(dataT.data, bx + px, by + py) > 0) hasData = true;
-                                        }
-                                    }
-
-                                    if (hasData) {
-                                        for (let v = -searchRange; v <= searchRange; v++) {
-                                            for (let u = -searchRange; u <= searchRange; u++) {
-                                                let sad = 0;
-                                                for (let y = 0; y < blockSize; y += 2) {
-                                                    for (let x = 0; x < blockSize; x += 2) {
-                                                        sad += Math.abs(getVal(dataT.data, bx + x, by + y) - getVal(dataT1.data, bx + x + u, by + y + v));
-                                                    }
-                                                }
-                                                if (sad < bestSAD) { bestSAD = sad; bestU = u; bestV = v; }
-                                            }
-                                        }
-                                    }
-                                    vectors[`${bx},${by}`] = { u: bestU, v: bestV };
-                                }
-                            }
-
-                            for (let y = 0; y < workY; y++) {
-                                for (let x = 0; x < workX; x++) {
-                                    const bx = Math.floor(x / blockSize) * blockSize;
-                                    const by = Math.floor(y / blockSize) * blockSize;
-                                    const vec = vectors[`${bx},${by}`] || { u: 0, v: 0 };
-                                    
-                                    const srcX = Math.round(x + vec.u * progress);
-                                    const srcY = Math.round(y + vec.v * progress);
-                                    
-                                    if (srcX >= 0 && srcX < workX && srcY >= 0 && srcY < workY) {
-                                        const dstIdx = (y * workX + x) * 4;
-                                        const srcIdx = (srcY * workX + srcX) * 4;
-                                        outData.data[dstIdx] = dataT.data[srcIdx];
-                                        outData.data[dstIdx+1] = dataT.data[srcIdx+1];
-                                        outData.data[dstIdx+2] = dataT.data[srcIdx+2];
-                                        outData.data[dstIdx+3] = dataT.data[srcIdx+3];
-                                    }
-                                }
-                            }
-                            
-                            const tempC = document.createElement('canvas');
-                            tempC.width = workX; tempC.height = workY;
-                            tempC.getContext('2d').putImageData(outData, 0, 0);
-                            
-                            ctx.imageSmoothingEnabled = false;
-                            ctx.drawImage(tempC, 0, 0, size.x, size.y);
-                            done(null, canvas);
-                        } catch (e) { done(e, canvas); }
-                    }
-                };
-
-                imgT.onload = onload; imgT1.onload = onload;
-                imgT.onerror = () => done(null, canvas); imgT1.onerror = () => done(null, canvas);
-                imgT.src = urlT; imgT1.src = urlT1;
-                return canvas;
-            }
-        });
-
         // Websocket
         window.isLive = true;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const wsHost = window.location.port === '5500' ? 'localhost:3000' : window.location.host;
-        
-        let ws;
-        function connectWebSocket() {
-            ws = new WebSocket(`${protocol}//${wsHost}`);
+        const ws = new WebSocket(`${protocol}//${wsHost}`);
 
-            ws.onmessage = (event) => {
-                const msg = JSON.parse(event.data);
-                if (msg.type === 'history') {
-                    lightningLayer.strikes = msg.data;
-                } else if (msg.type === 'strike') {
-                    lightningLayer.strikes.push({ lat: msg.lat, lon: msg.lon, timestamp: Date.now() });
-                    const bounds = map.getBounds();
-                    if (window.isLive && bounds.contains([msg.lat, msg.lon])) playStrikeSound();
-                }
-            };
-
-            ws.onclose = () => {
-                setTimeout(connectWebSocket, 3000);
-            };
-        }
-        connectWebSocket();
+        ws.onmessage = (event) => {
+            const msg = JSON.parse(event.data);
+            if (msg.type === 'history') {
+                lightningLayer.strikes = msg.data;
+            } else if (msg.type === 'strike') {
+                lightningLayer.strikes.push({ lat: msg.lat, lon: msg.lon, timestamp: Date.now() });
+                const bounds = map.getBounds();
+                if (window.isLive && bounds.contains([msg.lat, msg.lon])) playStrikeSound();
+            }
+        };
 
         // Radar & Unified Timeline Engine
         window.unifiedTimeMs = Date.now();
@@ -730,8 +565,6 @@
         const uniStatus = document.getElementById('uni-status');
         const playBtn = document.getElementById('uni-play-btn');
         const speedBtn = document.getElementById('uni-speed-btn');
-        const liveBtn = document.getElementById('uni-live-btn');
-        const nowMarker = document.getElementById('now-marker');
         const layerRadarCheckbox = document.getElementById('layer-radar');
         const layerCloudsCheckbox = document.getElementById('layer-clouds');
 
@@ -746,39 +579,19 @@
             { label: '0.5x', tickMs: 200, stepSec: 60 }
         ];
 
-        function updateMarker() {
-            const min = parseInt(uniTimeline.min);
-            const max = parseInt(uniTimeline.max);
-            if (max <= min) return;
-            const nowSec = Math.floor(Date.now() / 1000);
-            let pct = (nowSec - min) / (max - min);
-            if (pct >= 0 && pct <= 1) {
-                nowMarker.style.display = 'block';
-                nowMarker.style.left = `calc(${pct * 100}% - 1px)`;
-            } else {
-                nowMarker.style.display = 'none';
-            }
-        }
-
         function syncTimelineState() {
             const val = parseInt(uniTimeline.value);
-            const nowSec = Math.floor(Date.now() / 1000);
+            const max = parseInt(uniTimeline.max);
             
-            window.isLive = Math.abs(val - nowSec) <= 60;
-            window.isFuture = val > nowSec + 60;
+            window.isLive = (val >= max - 60);
 
             if (window.isLive && !window.isPlaying) {
                 window.unifiedTimeMs = Date.now();
                 uniStatus.innerText = 'LIVE';
                 uniStatus.style.color = '#10b981';
-            } else if (window.isFuture) {
-                window.unifiedTimeMs = val * 1000;
-                const minsFuture = Math.floor((val - nowSec) / 60);
-                uniStatus.innerText = `+${minsFuture} MIN (FORECAST)`;
-                uniStatus.style.color = '#f59e0b';
             } else {
                 window.unifiedTimeMs = val * 1000;
-                const minsAgo = Math.floor((nowSec - val) / 60);
+                const minsAgo = Math.floor((max - val) / 60);
                 uniStatus.innerText = `-${minsAgo} MIN`;
                 uniStatus.style.color = 'var(--text-mute)';
             }
@@ -786,74 +599,40 @@
             const date = new Date(window.unifiedTimeMs);
             uniTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
-            updateMarker();
             updateRadarVisuals();
         }
 
         function updateRadarVisuals() {
             if (radarFrames.length > 0) {
                 let activeFrame = radarFrames[0];
-                let previousFrame = radarFrames[0];
-                let isPrediction = false;
-                let predictionProgress = 0;
-
                 for (let i = 0; i < radarFrames.length; i++) {
                     if (radarFrames[i].time <= window.unifiedTimeMs / 1000) {
-                        previousFrame = activeFrame;
                         activeFrame = radarFrames[i];
                     } else break;
                 }
 
-                if (window.unifiedTimeMs / 1000 > radarFrames[radarFrames.length - 1].time) {
-                    isPrediction = true;
-                    if (radarFrames.length >= 2) {
-                        previousFrame = radarFrames[radarFrames.length - 2];
-                    }
-                    activeFrame = radarFrames[radarFrames.length - 1];
-                    const gap = Math.max(600, activeFrame.time - previousFrame.time); 
-                    predictionProgress = (window.unifiedTimeMs / 1000 - activeFrame.time) / gap;
+                if (!radarLayers[activeFrame.path]) {
+                    const url = `/api/radar/tile${activeFrame.path}/512/{z}/{x}/{y}/2/1_1.png`;
+                    radarLayers[activeFrame.path] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 3, transparent: true, className: 'pixelated-layer', zIndex: 10 }).addTo(map);
                 }
 
-                const layerKey = isPrediction ? `predict_${activeFrame.path}_${predictionProgress.toFixed(2)}` : activeFrame.path;
-
-                if (!radarLayers[layerKey]) {
-                    if (isPrediction && previousFrame.path !== activeFrame.path) {
-                        radarLayers[layerKey] = new OpticalFlowLayer({
-                            pathT: activeFrame.path,
-                            pathT1: previousFrame.path,
-                            progress: predictionProgress,
-                            opacity: 0,
-                            className: 'pixelated-layer',
-                            zIndex: 10
-                        }).addTo(map);
-                    } else {
-                        const url = `/api/radar/tile${activeFrame.path}/512/{z}/{x}/{y}/2/1_1.png`;
-                        radarLayers[layerKey] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 3, transparent: true, className: 'pixelated-layer', zIndex: 10 }).addTo(map);
-                    }
-                }
-
-                if (currentFramePath && currentFramePath !== layerKey && radarLayers[currentFramePath]) {
+                if (currentFramePath && currentFramePath !== activeFrame.path && radarLayers[currentFramePath]) {
                     radarLayers[currentFramePath].setOpacity(0);
                 }
 
-                currentFramePath = layerKey;
+                currentFramePath = activeFrame.path;
                 
                 if (layerRadarCheckbox.checked) {
-                    radarLayers[layerKey].setOpacity(0.65);
+                    radarLayers[activeFrame.path].setOpacity(0.65);
                 }
             }
 
             if (cloudFrames.length > 0) {
                 let activeCloud = cloudFrames[0];
-                
-                if (window.isFuture) {
-                    activeCloud = cloudFrames[cloudFrames.length - 1];
-                } else {
-                    for (let i = 0; i < cloudFrames.length; i++) {
-                        if (cloudFrames[i].time <= window.unifiedTimeMs / 1000) {
-                            activeCloud = cloudFrames[i];
-                        } else break;
-                    }
+                for (let i = 0; i < cloudFrames.length; i++) {
+                    if (cloudFrames[i].time <= window.unifiedTimeMs / 1000) {
+                        activeCloud = cloudFrames[i];
+                    } else break;
                 }
 
                 if (!cloudLayers[activeCloud.path]) {
@@ -885,29 +664,27 @@
                     cloudFrames = newClouds;
                     
                     const minTime = radarFrames[0].time;
-                    const maxTime = radarFrames[radarFrames.length - 1].time + 7200;
+                    const maxTime = Math.floor(Date.now() / 1000);
                     
                     uniTimeline.min = minTime;
                     uniTimeline.max = maxTime;
-                    uniTimeline.value = Math.floor(Date.now() / 1000);
+                    uniTimeline.value = maxTime;
                     uniTimeline.disabled = false;
                     playBtn.disabled = false;
                     speedBtn.disabled = false;
-                    liveBtn.disabled = false;
                     
                     syncTimelineState();
                 } else if (newFrames[newFrames.length - 1].time > radarFrames[radarFrames.length - 1].time) {
-                    const wasLive = window.isLive;
+                    const wasLive = parseInt(uniTimeline.value) >= parseInt(uniTimeline.max) - 60;
                     radarFrames = newFrames;
                     cloudFrames = newClouds;
-                    uniTimeline.max = radarFrames[radarFrames.length - 1].time + 7200;
+                    uniTimeline.max = Math.floor(Date.now() / 1000);
                     
                     const activePaths = radarFrames.map(f => f.path);
-                    for (const key in radarLayers) {
-                        const basePath = key.startsWith('predict_') ? key.split('_')[1] : key;
-                        if (!activePaths.includes(basePath)) {
-                            map.removeLayer(radarLayers[key]);
-                            delete radarLayers[key];
+                    for (const path in radarLayers) {
+                        if (!activePaths.includes(path)) {
+                            map.removeLayer(radarLayers[path]);
+                            delete radarLayers[path];
                         }
                     }
 
@@ -919,8 +696,8 @@
                         }
                     }
 
-                    if (wasLive) {
-                        uniTimeline.value = nowSec;
+                    if (wasLive && !window.isPlaying) {
+                        uniTimeline.value = uniTimeline.max;
                         syncTimelineState();
                     }
                 }
@@ -933,7 +710,7 @@
         setInterval(() => {
             if (radarFrames.length > 0) {
                 const nowSec = Math.floor(Date.now() / 1000);
-                uniTimeline.max = nowSec + 3600;
+                uniTimeline.max = nowSec;
                 if (window.isLive && !window.isPlaying) {
                     uniTimeline.value = nowSec;
                     window.unifiedTimeMs = Date.now();
@@ -943,10 +720,6 @@
             }
         }, 1000);
         setInterval(fetchRadarData, 120000);
-
-        map.on('zoom move', () => {
-            if (window.isFuture) updateRadarVisuals();
-        });
 
         uniTimeline.addEventListener('input', () => {
             if (window.isPlaying) stopLoop();
@@ -1003,16 +776,6 @@
             speedBtn.innerText = speeds[currentSpeedIdx].label;
             if (window.isPlaying) runLoop(); 
         });
-
-        liveBtn.addEventListener('click', () => {
-            if (window.isPlaying) stopLoop();
-            uniTimeline.value = Math.floor(Date.now() / 1000);
-            syncTimelineState();
-        });
-
-        setInterval(() => {
-            if (radarFrames.length > 0) updateMarker();
-        }, 10000);
     </script>
 </body>
 </html>
