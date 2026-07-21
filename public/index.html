@@ -139,6 +139,13 @@
         .btn:hover { background: var(--btn-hover); }
         .btn:active { background: var(--btn-active); }
         .pixelated-layer { image-rendering: pixelated; }
+
+        .timeline-wrapper { position: relative; width: 100%; margin: 6px 0 2px 0; display: flex; align-items: center; }
+        #now-marker {
+            position: absolute; top: -4px; bottom: -4px; width: 2px;
+            background: #10b981; pointer-events: none; z-index: 5;
+            box-shadow: 0 0 4px #10b981; display: none;
+        }
     </style>
 </head>
 <body>
@@ -220,11 +227,15 @@
             <div class="play-controls">
                 <button id="uni-play-btn" class="btn" disabled>▶ Play</button>
                 <button id="uni-speed-btn" class="btn" disabled>1x</button>
+                <button id="uni-live-btn" class="btn" disabled>LIVE</button>
             </div>
             <div style="font-size: 14px; font-weight: bold; letter-spacing: 0.05em;" id="uni-timestamp">--:--</div>
             <div style="font-size: 11px; color: var(--text-mute);" id="uni-status">LIVE</div>
         </div>
-        <input type="range" id="uni-timeline" min="0" max="0" value="0" step="60" disabled>
+        <div class="timeline-wrapper">
+            <div id="now-marker"></div>
+            <input type="range" id="uni-timeline" min="0" max="0" value="0" step="60" disabled>
+        </div>
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -565,6 +576,108 @@
             lightningLayer.displayAgeMs = parseInt(e.target.value) * 60 * 1000;
         });
 
+        // Client-Side Optical Flow Block-Matching Advection Engine
+        const OpticalFlowLayer = L.GridLayer.extend({
+            createTile: function(coords, done) {
+                const canvas = L.DomUtil.create('canvas', 'leaflet-tile');
+                const size = this.getTileSize();
+                canvas.width = size.x;
+                canvas.height = size.y;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+                const { pathT, pathT1, progress } = this.options;
+                if (!pathT || !pathT1 || progress <= 0) {
+                    setTimeout(() => done(null, canvas), 0);
+                    return canvas;
+                }
+
+                const urlT = `/api/radar/tile${pathT}/512/${coords.z}/${coords.x}/${coords.y}/2/1_1.png`;
+                const urlT1 = `/api/radar/tile${pathT1}/512/${coords.z}/${coords.x}/${coords.y}/2/1_1.png`;
+
+                let imgT = new Image(); let imgT1 = new Image();
+                let loaded = 0;
+
+                const onload = () => {
+                    loaded++;
+                    if (loaded === 2) {
+                        try {
+                            const cT = document.createElement('canvas'); const cT1 = document.createElement('canvas');
+                            cT.width = cT1.width = size.x; cT.height = cT1.height = size.y;
+                            const ctxT = cT.getContext('2d', { willReadFrequently: true });
+                            const ctxT1 = cT1.getContext('2d', { willReadFrequently: true });
+                            ctxT.drawImage(imgT, 0, 0); ctxT1.drawImage(imgT1, 0, 0);
+                            
+                            const dataT = ctxT.getImageData(0, 0, size.x, size.y);
+                            const dataT1 = ctxT1.getImageData(0, 0, size.x, size.y);
+                            const outData = ctx.createImageData(size.x, size.y);
+                            
+                            const blockSize = 32; const searchRange = 16; const vectors = {}; 
+                            
+                            const getVal = (data, x, y) => {
+                                if (x < 0 || y < 0 || x >= size.x || y >= size.y) return 0;
+                                const i = (y * size.x + x) * 4;
+                                return data[i+3] > 0 ? data[i] + data[i+1] + data[i+2] : 0; 
+                            };
+
+                            for (let by = 0; by < size.y; by += blockSize) {
+                                for (let bx = 0; bx < size.x; bx += blockSize) {
+                                    let bestSAD = Infinity; let bestU = 0, bestV = 0;
+                                    let hasData = false;
+                                    for(let py = 0; py < blockSize; py += 8) {
+                                        for(let px = 0; px < blockSize; px += 8) {
+                                            if (getVal(dataT.data, bx + px, by + py) > 0) hasData = true;
+                                        }
+                                    }
+
+                                    if (hasData) {
+                                        for (let v = -searchRange; v <= searchRange; v += 2) {
+                                            for (let u = -searchRange; u <= searchRange; u += 2) {
+                                                let sad = 0;
+                                                for (let y = 0; y < blockSize; y += 4) {
+                                                    for (let x = 0; x < blockSize; x += 4) {
+                                                        sad += Math.abs(getVal(dataT.data, bx + x, by + y) - getVal(dataT1.data, bx + x + u, by + y + v));
+                                                    }
+                                                }
+                                                if (sad < bestSAD) { bestSAD = sad; bestU = u; bestV = v; }
+                                            }
+                                        }
+                                    }
+                                    vectors[`${bx},${by}`] = { u: bestU, v: bestV };
+                                }
+                            }
+
+                            for (let y = 0; y < size.y; y++) {
+                                for (let x = 0; x < size.x; x++) {
+                                    const bx = Math.floor(x / blockSize) * blockSize;
+                                    const by = Math.floor(y / blockSize) * blockSize;
+                                    const vec = vectors[`${bx},${by}`] || { u: 0, v: 0 };
+                                    
+                                    const srcX = Math.round(x + vec.u * progress);
+                                    const srcY = Math.round(y + vec.v * progress);
+                                    
+                                    if (srcX >= 0 && srcX < size.x && srcY >= 0 && srcY < size.y) {
+                                        const dstIdx = (y * size.x + x) * 4;
+                                        const srcIdx = (srcY * size.x + srcX) * 4;
+                                        outData.data[dstIdx] = dataT.data[srcIdx];
+                                        outData.data[dstIdx+1] = dataT.data[srcIdx+1];
+                                        outData.data[dstIdx+2] = dataT.data[srcIdx+2];
+                                        outData.data[dstIdx+3] = dataT.data[srcIdx+3];
+                                    }
+                                }
+                            }
+                            ctx.putImageData(outData, 0, 0);
+                            done(null, canvas);
+                        } catch (e) { done(e, canvas); }
+                    }
+                };
+
+                imgT.onload = onload; imgT1.onload = onload;
+                imgT.onerror = () => done(null, canvas); imgT1.onerror = () => done(null, canvas);
+                imgT.src = urlT; imgT1.src = urlT1;
+                return canvas;
+            }
+        });
+
         // Websocket
         window.isLive = true;
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -604,6 +717,8 @@
         const uniStatus = document.getElementById('uni-status');
         const playBtn = document.getElementById('uni-play-btn');
         const speedBtn = document.getElementById('uni-speed-btn');
+        const liveBtn = document.getElementById('uni-live-btn');
+        const nowMarker = document.getElementById('now-marker');
         const layerRadarCheckbox = document.getElementById('layer-radar');
         const layerCloudsCheckbox = document.getElementById('layer-clouds');
 
@@ -617,6 +732,20 @@
             { label: '2x', tickMs: 50, stepSec: 60 },
             { label: '0.5x', tickMs: 200, stepSec: 60 }
         ];
+
+        function updateMarker() {
+            const min = parseInt(uniTimeline.min);
+            const max = parseInt(uniTimeline.max);
+            if (max <= min) return;
+            const nowSec = Math.floor(Date.now() / 1000);
+            let pct = (nowSec - min) / (max - min);
+            if (pct >= 0 && pct <= 1) {
+                nowMarker.style.display = 'block';
+                nowMarker.style.left = `calc(${pct * 100}% - 1px)`;
+            } else {
+                nowMarker.style.display = 'none';
+            }
+        }
 
         function syncTimelineState() {
             const val = parseInt(uniTimeline.value);
@@ -632,8 +761,8 @@
             } else if (window.isFuture) {
                 window.unifiedTimeMs = val * 1000;
                 const minsFuture = Math.floor((val - nowSec) / 60);
-                uniStatus.innerText = `+${minsFuture} MIN`;
-                uniStatus.style.color = '#eab308';
+                uniStatus.innerText = `+${minsFuture} MIN (FORECAST)`;
+                uniStatus.style.color = '#f59e0b';
             } else {
                 window.unifiedTimeMs = val * 1000;
                 const minsAgo = Math.floor((nowSec - val) / 60);
@@ -644,60 +773,60 @@
             const date = new Date(window.unifiedTimeMs);
             uniTimestamp.innerText = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 
+            updateMarker();
             updateRadarVisuals();
         }
 
         function updateRadarVisuals() {
             if (radarFrames.length > 0) {
                 let activeFrame = radarFrames[0];
-                
-                if (window.isFuture) {
+                let previousFrame = radarFrames[0];
+                let isPrediction = false;
+                let predictionProgress = 0;
+
+                for (let i = 0; i < radarFrames.length; i++) {
+                    if (radarFrames[i].time <= window.unifiedTimeMs / 1000) {
+                        previousFrame = activeFrame;
+                        activeFrame = radarFrames[i];
+                    } else break;
+                }
+
+                if (window.unifiedTimeMs / 1000 > radarFrames[radarFrames.length - 1].time) {
+                    isPrediction = true;
+                    if (radarFrames.length >= 2) {
+                        previousFrame = radarFrames[radarFrames.length - 2];
+                    }
                     activeFrame = radarFrames[radarFrames.length - 1];
-                } else {
-                    for (let i = 0; i < radarFrames.length; i++) {
-                        if (radarFrames[i].time <= window.unifiedTimeMs / 1000) {
-                            activeFrame = radarFrames[i];
-                        } else break;
+                    const gap = Math.max(600, activeFrame.time - previousFrame.time); 
+                    predictionProgress = (window.unifiedTimeMs / 1000 - activeFrame.time) / gap;
+                }
+
+                const layerKey = isPrediction ? `predict_${activeFrame.path}_${predictionProgress.toFixed(2)}` : activeFrame.path;
+
+                if (!radarLayers[layerKey]) {
+                    if (isPrediction && previousFrame.path !== activeFrame.path) {
+                        radarLayers[layerKey] = new OpticalFlowLayer({
+                            pathT: activeFrame.path,
+                            pathT1: previousFrame.path,
+                            progress: predictionProgress,
+                            opacity: 0,
+                            className: 'pixelated-layer',
+                            zIndex: 10
+                        }).addTo(map);
+                    } else {
+                        const url = `/api/radar/tile${activeFrame.path}/512/{z}/{x}/{y}/2/1_1.png`;
+                        radarLayers[layerKey] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 3, transparent: true, className: 'pixelated-layer', zIndex: 10 }).addTo(map);
                     }
                 }
 
-                if (!radarLayers[activeFrame.path]) {
-                    const url = `/api/radar/tile${activeFrame.path}/512/{z}/{x}/{y}/2/1_1.png`;
-                    radarLayers[activeFrame.path] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 3, transparent: true, className: 'pixelated-layer', zIndex: 10 }).addTo(map);
-                }
-
-                if (currentFramePath && currentFramePath !== activeFrame.path && radarLayers[currentFramePath]) {
+                if (currentFramePath && currentFramePath !== layerKey && radarLayers[currentFramePath]) {
                     radarLayers[currentFramePath].setOpacity(0);
-                    const oldContainer = radarLayers[currentFramePath].getContainer();
-                    if (oldContainer) {
-                        oldContainer.style.transform = '';
-                        oldContainer.style.transition = 'none';
-                    }
                 }
 
-                currentFramePath = activeFrame.path;
-                const container = radarLayers[activeFrame.path].getContainer();
+                currentFramePath = layerKey;
                 
                 if (layerRadarCheckbox.checked) {
-                    radarLayers[activeFrame.path].setOpacity(0.65);
-                }
-
-                if (window.isFuture && window.stormMotion && container) {
-                    const futureSeconds = (window.unifiedTimeMs / 1000) - activeFrame.time;
-                    const center = map.getCenter();
-                    const centerPt = map.latLngToContainerPoint(center);
-                    const futureLat = center.lat + (window.stormMotion.latPerSec * futureSeconds);
-                    const futureLng = center.lng + (window.stormMotion.lngPerSec * futureSeconds);
-                    const futurePt = map.latLngToContainerPoint([futureLat, futureLng]);
-                    
-                    const offsetX = futurePt.x - centerPt.x;
-                    const offsetY = futurePt.y - centerPt.y;
-                    
-                    container.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
-                    container.style.transition = 'transform 0.1s linear';
-                } else if (container) {
-                    container.style.transform = '';
-                    container.style.transition = 'none';
+                    radarLayers[layerKey].setOpacity(0.65);
                 }
             }
 
@@ -721,36 +850,12 @@
 
                 if (currentCloudFramePath && currentCloudFramePath !== activeCloud.path && cloudLayers[currentCloudFramePath]) {
                     cloudLayers[currentCloudFramePath].setOpacity(0);
-                    const oldContainer = cloudLayers[currentCloudFramePath].getContainer();
-                    if (oldContainer) {
-                        oldContainer.style.transform = '';
-                        oldContainer.style.transition = 'none';
-                    }
                 }
 
                 currentCloudFramePath = activeCloud.path;
-                const cloudContainer = cloudLayers[activeCloud.path].getContainer();
                 
                 if (layerCloudsCheckbox.checked) {
                     cloudLayers[activeCloud.path].setOpacity(0.4);
-                }
-
-                if (window.isFuture && window.stormMotion && cloudContainer) {
-                    const futureSeconds = (window.unifiedTimeMs / 1000) - activeCloud.time;
-                    const center = map.getCenter();
-                    const centerPt = map.latLngToContainerPoint(center);
-                    const futureLat = center.lat + (window.stormMotion.latPerSec * futureSeconds);
-                    const futureLng = center.lng + (window.stormMotion.lngPerSec * futureSeconds);
-                    const futurePt = map.latLngToContainerPoint([futureLat, futureLng]);
-                    
-                    const offsetX = futurePt.x - centerPt.x;
-                    const offsetY = futurePt.y - centerPt.y;
-                    
-                    cloudContainer.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
-                    cloudContainer.style.transition = 'transform 0.1s linear';
-                } else if (cloudContainer) {
-                    cloudContainer.style.transform = '';
-                    cloudContainer.style.transition = 'none';
                 }
             }
         }
@@ -767,28 +872,29 @@
                     cloudFrames = newClouds;
                     
                     const minTime = radarFrames[0].time;
-                    const maxTime = Math.floor(Date.now() / 1000);
+                    const maxTime = radarFrames[radarFrames.length - 1].time + 7200;
                     
                     uniTimeline.min = minTime;
-                    uniTimeline.max = maxTime + 3600;
-                    uniTimeline.value = maxTime;
+                    uniTimeline.max = maxTime;
+                    uniTimeline.value = Math.floor(Date.now() / 1000);
                     uniTimeline.disabled = false;
                     playBtn.disabled = false;
                     speedBtn.disabled = false;
+                    liveBtn.disabled = false;
                     
                     syncTimelineState();
                 } else if (newFrames[newFrames.length - 1].time > radarFrames[radarFrames.length - 1].time) {
-                    const wasLive = window.isLive && !window.isPlaying;
+                    const wasLive = window.isLive;
                     radarFrames = newFrames;
                     cloudFrames = newClouds;
-                    const nowSec = Math.floor(Date.now() / 1000);
-                    uniTimeline.max = nowSec + 3600;
+                    uniTimeline.max = radarFrames[radarFrames.length - 1].time + 7200;
                     
                     const activePaths = radarFrames.map(f => f.path);
-                    for (const path in radarLayers) {
-                        if (!activePaths.includes(path)) {
-                            map.removeLayer(radarLayers[path]);
-                            delete radarLayers[path];
+                    for (const key in radarLayers) {
+                        const basePath = key.startsWith('predict_') ? key.split('_')[1] : key;
+                        if (!activePaths.includes(basePath)) {
+                            map.removeLayer(radarLayers[key]);
+                            delete radarLayers[key];
                         }
                     }
 
@@ -884,6 +990,16 @@
             speedBtn.innerText = speeds[currentSpeedIdx].label;
             if (window.isPlaying) runLoop(); 
         });
+
+        liveBtn.addEventListener('click', () => {
+            if (window.isPlaying) stopLoop();
+            uniTimeline.value = Math.floor(Date.now() / 1000);
+            syncTimelineState();
+        });
+
+        setInterval(() => {
+            if (radarFrames.length > 0) updateMarker();
+        }, 10000);
     </script>
 </body>
 </html>
