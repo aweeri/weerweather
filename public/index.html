@@ -379,7 +379,7 @@
                     
                     const pt = this._map.latLngToContainerPoint([strike.lat, strike.lon]);
                     
-                    if (showVectors && ageReal >= 0 && ageReal <= this.displayAgeMs) {
+                    if (ageReal >= 0 && ageReal <= this.displayAgeMs) {
                         visiblePoints.push({ x: pt.x, y: pt.y, lat: strike.lat, lon: strike.lon, age: ageReal, timestamp: strike.timestamp });
                     }
 
@@ -421,7 +421,7 @@
                 }
 
                 // PASS 2: Draw Storm Vectors ON TOP
-                if (showVectors && visiblePoints.length > 0) {
+                if (visiblePoints.length > 0) {
                     const clusters = [];
                     // Anchor clustering geographically (~35-40km radius) so it survives zooming
                     const CLUSTER_DEG_SQ = 0.35 * 0.35; 
@@ -493,7 +493,7 @@
                                 c.latPerSec = (latlngN.lat - latlngO.lat) / timeDiffSec;
                                 c.lngPerSec = (latlngN.lng - latlngO.lng) / timeDiffSec;
 
-                                if (window.isFuture) return;
+                                if (window.isFuture || !showVectors) return;
 
                                 // Draw Bounding Circle
                                 ctx.beginPath();
@@ -703,10 +703,15 @@
 
             if (cloudFrames.length > 0) {
                 let activeCloud = cloudFrames[0];
-                for (let i = 0; i < cloudFrames.length; i++) {
-                    if (cloudFrames[i].time <= window.unifiedTimeMs / 1000) {
-                        activeCloud = cloudFrames[i];
-                    } else break;
+                
+                if (window.isFuture) {
+                    activeCloud = cloudFrames[cloudFrames.length - 1];
+                } else {
+                    for (let i = 0; i < cloudFrames.length; i++) {
+                        if (cloudFrames[i].time <= window.unifiedTimeMs / 1000) {
+                            activeCloud = cloudFrames[i];
+                        } else break;
+                    }
                 }
 
                 if (!cloudLayers[activeCloud.path]) {
@@ -716,12 +721,36 @@
 
                 if (currentCloudFramePath && currentCloudFramePath !== activeCloud.path && cloudLayers[currentCloudFramePath]) {
                     cloudLayers[currentCloudFramePath].setOpacity(0);
+                    const oldContainer = cloudLayers[currentCloudFramePath].getContainer();
+                    if (oldContainer) {
+                        oldContainer.style.transform = '';
+                        oldContainer.style.transition = 'none';
+                    }
                 }
 
                 currentCloudFramePath = activeCloud.path;
+                const cloudContainer = cloudLayers[activeCloud.path].getContainer();
                 
                 if (layerCloudsCheckbox.checked) {
                     cloudLayers[activeCloud.path].setOpacity(0.4);
+                }
+
+                if (window.isFuture && window.stormMotion && cloudContainer) {
+                    const futureSeconds = (window.unifiedTimeMs / 1000) - activeCloud.time;
+                    const center = map.getCenter();
+                    const centerPt = map.latLngToContainerPoint(center);
+                    const futureLat = center.lat + (window.stormMotion.latPerSec * futureSeconds);
+                    const futureLng = center.lng + (window.stormMotion.lngPerSec * futureSeconds);
+                    const futurePt = map.latLngToContainerPoint([futureLat, futureLng]);
+                    
+                    const offsetX = futurePt.x - centerPt.x;
+                    const offsetY = futurePt.y - centerPt.y;
+                    
+                    cloudContainer.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+                    cloudContainer.style.transition = 'transform 0.1s linear';
+                } else if (cloudContainer) {
+                    cloudContainer.style.transform = '';
+                    cloudContainer.style.transition = 'none';
                 }
             }
         }
