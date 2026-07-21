@@ -581,17 +581,22 @@
 
         function syncTimelineState() {
             const val = parseInt(uniTimeline.value);
-            const max = parseInt(uniTimeline.max);
+            const nowSec = Math.floor(Date.now() / 1000);
             
-            window.isLive = (val >= max - 60);
+            window.isLive = (Math.abs(val - nowSec) < 60);
 
             if (window.isLive && !window.isPlaying) {
                 window.unifiedTimeMs = Date.now();
                 uniStatus.innerText = 'LIVE';
                 uniStatus.style.color = '#10b981';
+            } else if (val > nowSec + 60) {
+                window.unifiedTimeMs = val * 1000;
+                const minsAhead = Math.floor((val - nowSec) / 60);
+                uniStatus.innerText = `+${minsAhead} MIN (FORECAST)`;
+                uniStatus.style.color = '#f59e0b';
             } else {
                 window.unifiedTimeMs = val * 1000;
-                const minsAgo = Math.floor((max - val) / 60);
+                const minsAgo = Math.floor((nowSec - val) / 60);
                 uniStatus.innerText = `-${minsAgo} MIN`;
                 uniStatus.style.color = 'var(--text-mute)';
             }
@@ -656,7 +661,9 @@
             try {
                 const res = await fetch('/api/radar/metadata');
                 const data = await res.json();
-                const newFrames = data.radar.past;
+                const pastFrames = data.radar.past || [];
+                const nowcastFrames = data.radar.nowcast || [];
+                const newFrames = pastFrames.concat(nowcastFrames);
                 const newClouds = data.satellite && data.satellite.infrared ? data.satellite.infrared : [];
 
                 if (radarFrames.length === 0) {
@@ -664,21 +671,21 @@
                     cloudFrames = newClouds;
                     
                     const minTime = radarFrames[0].time;
-                    const maxTime = Math.floor(Date.now() / 1000);
+                    const maxTime = radarFrames[radarFrames.length - 1].time;
                     
                     uniTimeline.min = minTime;
                     uniTimeline.max = maxTime;
-                    uniTimeline.value = maxTime;
+                    uniTimeline.value = Math.floor(Date.now() / 1000);
                     uniTimeline.disabled = false;
                     playBtn.disabled = false;
                     speedBtn.disabled = false;
                     
                     syncTimelineState();
                 } else if (newFrames[newFrames.length - 1].time > radarFrames[radarFrames.length - 1].time) {
-                    const wasLive = parseInt(uniTimeline.value) >= parseInt(uniTimeline.max) - 60;
+                    const wasLive = window.isLive;
                     radarFrames = newFrames;
                     cloudFrames = newClouds;
-                    uniTimeline.max = Math.floor(Date.now() / 1000);
+                    uniTimeline.max = radarFrames[radarFrames.length - 1].time;
                     
                     const activePaths = radarFrames.map(f => f.path);
                     for (const path in radarLayers) {
@@ -697,7 +704,7 @@
                     }
 
                     if (wasLive && !window.isPlaying) {
-                        uniTimeline.value = uniTimeline.max;
+                        uniTimeline.value = Math.floor(Date.now() / 1000);
                         syncTimelineState();
                     }
                 }
@@ -709,9 +716,8 @@
         fetchRadarData();
         setInterval(() => {
             if (radarFrames.length > 0) {
-                const nowSec = Math.floor(Date.now() / 1000);
-                uniTimeline.max = nowSec;
                 if (window.isLive && !window.isPlaying) {
+                    const nowSec = Math.floor(Date.now() / 1000);
                     uniTimeline.value = nowSec;
                     window.unifiedTimeMs = Date.now();
                     const date = new Date(window.unifiedTimeMs);

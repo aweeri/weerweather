@@ -117,8 +117,13 @@ function queuePrefetch(metadata) {
         }
     }
 
-    if (metadata.radar && metadata.radar.past) {
-        metadata.radar.past.forEach(frame => enqueueTiles(frame.path, 512, 2, '1_1'));
+    if (metadata.radar) {
+        if (metadata.radar.past) {
+            metadata.radar.past.forEach(frame => enqueueTiles(frame.path, 512, 2, '1_1'));
+        }
+        if (metadata.radar.nowcast) {
+            metadata.radar.nowcast.forEach(frame => enqueueTiles(frame.path, 512, 2, '1_1'));
+        }
     }
     if (metadata.satellite && metadata.satellite.infrared) {
         metadata.satellite.infrared.forEach(frame => enqueueTiles(frame.path, 256, 0, '0_0'));
@@ -146,8 +151,13 @@ async function getMetadata() {
 
 function garbageCollectTiles(newMetadata) {
     const activePaths = new Set();
-    if (newMetadata.radar && newMetadata.radar.past) {
-        newMetadata.radar.past.forEach(frame => activePaths.add(frame.path));
+    if (newMetadata.radar) {
+        if (newMetadata.radar.past) {
+            newMetadata.radar.past.forEach(frame => activePaths.add(frame.path));
+        }
+        if (newMetadata.radar.nowcast) {
+            newMetadata.radar.nowcast.forEach(frame => activePaths.add(frame.path));
+        }
     }
     if (newMetadata.satellite && newMetadata.satellite.infrared) {
         newMetadata.satellite.infrared.forEach(frame => activePaths.add(frame.path));
