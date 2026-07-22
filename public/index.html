@@ -280,7 +280,7 @@
             if (!isSoundEnabled) return;
             
             if (navigator.vibrate) {
-                navigator.vibrate(5);
+                navigator.vibrate(15);
             }
 
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
