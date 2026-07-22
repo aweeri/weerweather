@@ -278,6 +278,11 @@
 
         function playStrikeSound() {
             if (!isSoundEnabled) return;
+            
+            if (navigator.vibrate) {
+                navigator.vibrate(5);
+            }
+
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             if (audioCtx.state === 'suspended') return;
 
