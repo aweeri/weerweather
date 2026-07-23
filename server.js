@@ -125,9 +125,6 @@ function queuePrefetch(metadata) {
             metadata.radar.nowcast.forEach(frame => enqueueTiles(frame.path, 512, 2, '1_1'));
         }
     }
-    if (metadata.satellite && metadata.satellite.infrared) {
-        metadata.satellite.infrared.forEach(frame => enqueueTiles(frame.path, 256, 0, '0_0'));
-    }
 
     processPrefetchQueue();
 }
@@ -158,9 +155,6 @@ function garbageCollectTiles(newMetadata) {
         if (newMetadata.radar.nowcast) {
             newMetadata.radar.nowcast.forEach(frame => activePaths.add(frame.path));
         }
-    }
-    if (newMetadata.satellite && newMetadata.satellite.infrared) {
-        newMetadata.satellite.infrared.forEach(frame => activePaths.add(frame.path));
     }
     
     let deletedCount = 0;
