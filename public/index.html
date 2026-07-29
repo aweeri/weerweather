@@ -152,11 +152,11 @@
                         <span class="slider"></span>
                     </label>
                 </div>
-                <div class="control-row">
+                <div class="control-row" title="Upcoming feature" style="opacity: 0.5; cursor: not-allowed;">
                     <span>Cloud Cover</span>
                     <label class="switch">
-                        <input type="checkbox" id="layer-clouds">
-                        <span class="slider"></span>
+                        <input type="checkbox" id="layer-clouds" disabled>
+                        <span class="slider" style="cursor: not-allowed;"></span>
                     </label>
                 </div>
                 <div class="control-row">
@@ -234,7 +234,7 @@
         const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
         let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-        const savedSettings = ['layer-radar', 'layer-clouds', 'layer-lightning', 'layer-vectors', 'layer-terminator', 'toggle-sound', 'toggle-theme'];
+        const savedSettings = ['layer-radar', 'layer-lightning', 'layer-vectors', 'layer-terminator', 'toggle-sound', 'toggle-theme'];
         savedSettings.forEach(id => {
             const el = document.getElementById(id);
             const val = localStorage.getItem(id);
@@ -580,19 +580,15 @@
         window.isPlaying = false;
         
         const radarLayers = {};
-        const cloudLayers = {};
         let currentFramePath = null;
-        let currentCloudFramePath = null;
         const uniTimeline = document.getElementById('uni-timeline');
         const uniTimestamp = document.getElementById('uni-timestamp');
         const uniStatus = document.getElementById('uni-status');
         const playBtn = document.getElementById('uni-play-btn');
         const speedBtn = document.getElementById('uni-speed-btn');
         const layerRadarCheckbox = document.getElementById('layer-radar');
-        const layerCloudsCheckbox = document.getElementById('layer-clouds');
 
         let radarFrames = [];
-        let cloudFrames = [];
         let playInterval = null;
         let currentSpeedIdx = 0;
         
@@ -651,30 +647,6 @@
                     radarLayers[activeFrame.path].setOpacity(0.65);
                 }
             }
-
-            if (cloudFrames.length > 0) {
-                let activeCloud = cloudFrames[0];
-                for (let i = 0; i < cloudFrames.length; i++) {
-                    if (cloudFrames[i].time <= window.unifiedTimeMs / 1000) {
-                        activeCloud = cloudFrames[i];
-                    } else break;
-                }
-
-                if (!cloudLayers[activeCloud.path]) {
-                    const url = `/api/radar/tile${activeCloud.path}/256/{z}/{x}/{y}/0/0_0.png`;
-                    cloudLayers[activeCloud.path] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 3, transparent: true, className: 'pixelated-layer', zIndex: 5 }).addTo(map);
-                }
-
-                if (currentCloudFramePath && currentCloudFramePath !== activeCloud.path && cloudLayers[currentCloudFramePath]) {
-                    cloudLayers[currentCloudFramePath].setOpacity(0);
-                }
-
-                currentCloudFramePath = activeCloud.path;
-                
-                if (layerCloudsCheckbox.checked) {
-                    cloudLayers[activeCloud.path].setOpacity(0.4);
-                }
-            }
         }
 
         async function fetchRadarData() {
@@ -682,11 +654,9 @@
                 const res = await fetch('/api/radar/metadata');
                 const data = await res.json();
                 const newFrames = data.radar.past;
-                const newClouds = data.satellite && data.satellite.infrared ? data.satellite.infrared : [];
 
                 if (radarFrames.length === 0) {
                     radarFrames = newFrames;
-                    cloudFrames = newClouds;
                     
                     const minTime = radarFrames[0].time;
                     const maxTime = Math.floor(Date.now() / 1000);
@@ -702,7 +672,6 @@
                 } else if (newFrames[newFrames.length - 1].time > radarFrames[radarFrames.length - 1].time) {
                     const wasLive = parseInt(uniTimeline.value) >= parseInt(uniTimeline.max) - 60;
                     radarFrames = newFrames;
-                    cloudFrames = newClouds;
                     uniTimeline.max = Math.floor(Date.now() / 1000);
                     
                     const activePaths = radarFrames.map(f => f.path);
@@ -710,14 +679,6 @@
                         if (!activePaths.includes(path)) {
                             map.removeLayer(radarLayers[path]);
                             delete radarLayers[path];
-                        }
-                    }
-
-                    const activeCloudPaths = cloudFrames.map(f => f.path);
-                    for (const path in cloudLayers) {
-                        if (!activeCloudPaths.includes(path)) {
-                            map.removeLayer(cloudLayers[path]);
-                            delete cloudLayers[path];
                         }
                     }
 
@@ -758,16 +719,6 @@
             } else {
                 if (currentFramePath && radarLayers[currentFramePath]) {
                     radarLayers[currentFramePath].setOpacity(0);
-                }
-            }
-        });
-
-        layerCloudsCheckbox.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                updateRadarVisuals();
-            } else {
-                if (currentCloudFramePath && cloudLayers[currentCloudFramePath]) {
-                    cloudLayers[currentCloudFramePath].setOpacity(0);
                 }
             }
         });
