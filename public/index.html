@@ -133,6 +133,15 @@
         .btn:hover { background: var(--btn-hover); }
         .btn:active { background: var(--btn-active); }
         .pixelated-layer { image-rendering: pixelated; }
+
+        .user-location-dot {
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            background: #1a73e8;
+            border: 3px solid #ffffff;
+            box-shadow: 0 0 0 8px rgba(26, 115, 232, 0.18), 0 0 18px rgba(26, 115, 232, 0.45);
+        }
     </style>
 </head>
 <body>
@@ -233,6 +242,10 @@
     <script>
         const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
         let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+        const userLocationLayer = L.layerGroup().addTo(map);
+        let userLocationMarker = null;
+        let userAccuracyRing = null;
+        let hasCenteredOnUser = false;
 
         const savedSettings = ['layer-radar', 'layer-lightning', 'layer-vectors', 'layer-terminator', 'toggle-sound', 'toggle-theme'];
         savedSettings.forEach(id => {
@@ -269,6 +282,68 @@
             panel.classList.toggle('collapsed');
             e.target.innerText = panel.classList.contains('collapsed') ? '[ + ] SHOW' : '[ – ] HIDE';
         });
+
+        function updateUserLocation(lat, lon, accuracyMeters) {
+            const latLng = [lat, lon];
+
+            if (!userLocationMarker) {
+                userLocationMarker = L.marker(latLng, {
+                    icon: L.divIcon({
+                        className: '',
+                        html: '<div class="user-location-dot"></div>',
+                        iconSize: [18, 18],
+                        iconAnchor: [9, 9]
+                    }),
+                    zIndexOffset: 1000
+                }).addTo(userLocationLayer);
+            } else {
+                userLocationMarker.setLatLng(latLng);
+            }
+
+            if (!userAccuracyRing) {
+                userAccuracyRing = L.circle(latLng, {
+                    radius: accuracyMeters,
+                    color: '#1a73e8',
+                    weight: 1,
+                    opacity: 0.65,
+                    fillColor: '#1a73e8',
+                    fillOpacity: 0.15,
+                    interactive: false
+                }).addTo(userLocationLayer);
+            } else {
+                userAccuracyRing.setLatLng(latLng);
+                userAccuracyRing.setRadius(accuracyMeters);
+            }
+
+            if (!hasCenteredOnUser) {
+                hasCenteredOnUser = true;
+                map.setView(latLng, Math.max(map.getZoom(), 11));
+            }
+        }
+
+        function bootUserLocation() {
+            if (!navigator.geolocation) return;
+
+            navigator.geolocation.watchPosition(
+                (position) => {
+                    updateUserLocation(
+                        position.coords.latitude,
+                        position.coords.longitude,
+                        position.coords.accuracy || 30
+                    );
+                },
+                (error) => {
+                    console.warn('Geolocation unavailable:', error.message);
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 60000
+                }
+            );
+        }
+
+        bootUserLocation();
 
         // Audio Engine
         let audioCtx = null;
