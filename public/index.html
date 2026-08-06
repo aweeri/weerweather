@@ -246,7 +246,12 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/@joergdietrich/leaflet.terminator"></script>
     <script>
-        const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
+        const map = L.map('map', {
+            zoomControl: false,
+            attributionControl: false,
+            zoomSnap: 0.01,
+            zoomDelta: 0.25
+        }).setView([50.29, 18.66], 5);
         map.doubleClickZoom.disable();
         let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
         const userLocationLayer = L.layerGroup().addTo(map);
