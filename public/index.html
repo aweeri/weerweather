@@ -372,6 +372,7 @@
 
             let holdTimer = null;
             let gestureActive = false;
+            let secondTapPending = false;
             let gestureAnchor = null;
             let gestureStartY = 0;
             let gestureBaseZoom = 0;
@@ -383,6 +384,7 @@
                     holdTimer = null;
                 }
                 gestureActive = false;
+                secondTapPending = false;
                 gestureAnchor = null;
                 gestureLastAppliedZoom = null;
                 firstTouchId = null;
@@ -409,9 +411,12 @@
                 const isSecondTap = dt > 0 && dt <= DOUBLE_TAP_MAX_DELAY_MS && moveSq <= TAP_MAX_MOVE_PX * TAP_MAX_MOVE_PX;
                 if (!isSecondTap) return;
 
+                secondTapPending = true;
+                event.preventDefault();
+
                 if (holdTimer) clearTimeout(holdTimer);
                 holdTimer = setTimeout(() => {
-                    if (!firstTouchId || event.touches.length !== 1) return;
+                    if (firstTouchId === null || !secondTapPending) return;
                     gestureActive = true;
                     gestureAnchor = targetMap.mouseEventToContainerPoint({ clientX: touch.clientX, clientY: touch.clientY });
                     gestureStartY = touch.clientY;
@@ -450,12 +455,17 @@
                     return;
                 }
 
+                if (secondTapPending) {
+                    event.preventDefault();
+                }
+
                 const driftX = touch.clientX - touchStartX;
                 const driftY = touch.clientY - touchStartY;
                 const driftSq = driftX * driftX + driftY * driftY;
                 if (driftSq > TAP_MAX_MOVE_PX * TAP_MAX_MOVE_PX && holdTimer) {
                     clearTimeout(holdTimer);
                     holdTimer = null;
+                    secondTapPending = false;
                 }
             }, { passive: false });
 
@@ -482,6 +492,7 @@
                 }
 
                 gestureActive = false;
+                secondTapPending = false;
                 gestureAnchor = null;
                 gestureLastAppliedZoom = null;
                 firstTouchId = null;
@@ -497,6 +508,7 @@
                     targetMap.touchZoom.enable();
                 }
                 gestureActive = false;
+                secondTapPending = false;
                 gestureAnchor = null;
                 gestureLastAppliedZoom = null;
                 firstTouchId = null;
