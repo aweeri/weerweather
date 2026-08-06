@@ -18,6 +18,10 @@ const BLITZ_TLS_QUARANTINE_MS = 6 * 60 * 60 * 1000;
 const BLITZ_UNSUPPORTED_ENDPOINT_QUARANTINE_MS = 24 * 60 * 60 * 1000;
 const BLITZ_DECODE_ERROR_LOG_WINDOW_MS = 60000;
 const BLITZ_DECODE_ERROR_LOG_LIMIT = 8;
+const RADAR_PREFETCH_ENABLED = process.env.RADAR_PREFETCH_ENABLED === 'true';
+const RADAR_PREFETCH_MAX_Z = Number.parseInt(process.env.RADAR_PREFETCH_MAX_Z || '1', 10);
+const RADAR_PREFETCH_FRAME_LIMIT = Number.parseInt(process.env.RADAR_PREFETCH_FRAME_LIMIT || '2', 10);
+const RADAR_429_LOG_INTERVAL_MS = 30000;
 
 // --- 0. Persistent Disk Storage Setup ---
 const DATA_DIR = path.join(__dirname, 'data');
@@ -95,8 +99,24 @@ function logError(message, err) {
 
 let prefetchQueue = [];
 let isPrefetching = false;
+let radar429Count = 0;
+let radar429WindowStart = Date.now();
+
+function recordRadar429(source, targetUrl) {
+    const now = Date.now();
+    radar429Count += 1;
+    if (now - radar429WindowStart >= RADAR_429_LOG_INTERVAL_MS) {
+        logWarn(`[Radar ${source}] Received ${radar429Count} HTTP 429 responses in the last ${RADAR_429_LOG_INTERVAL_MS}ms.`);
+        radar429Count = 0;
+        radar429WindowStart = now;
+    }
+    if (radar429Count === 1) {
+        logWarn(`[Radar ${source}] First 429 in window: ${targetUrl}`);
+    }
+}
 
 async function processPrefetchQueue() {
+    if (!RADAR_PREFETCH_ENABLED) return;
     if (isPrefetching || prefetchQueue.length === 0) return;
     isPrefetching = true;
     
@@ -113,8 +133,12 @@ async function processPrefetchQueue() {
                     const buffer = Buffer.from(arrayBuffer);
                     tileCache.set(tilePath, { buffer, contentType });
                 } else if (response.status === 429) {
+                    recordRadar429('Prefetch', targetUrl);
                     prefetchQueue.unshift(tilePath);
-                    await new Promise(r => setTimeout(r, 5000));
+                    const retryAfterHeader = response.headers.get('retry-after');
+                    const retryAfterSec = Number.parseInt(retryAfterHeader || '5', 10);
+                    const sleepMs = Number.isFinite(retryAfterSec) ? Math.min(Math.max(retryAfterSec, 5), 60) * 1000 : 5000;
+                    await new Promise(r => setTimeout(r, sleepMs));
                     continue;
                 } else {
                     console.error(`[Radar Cache] Prefetch failed: ${response.status} ${response.statusText} -> ${targetUrl}`);
@@ -129,10 +153,10 @@ async function processPrefetchQueue() {
 }
 
 function queuePrefetch(metadata) {
-    if (!metadata) return;
+    if (!metadata || !RADAR_PREFETCH_ENABLED) return;
     
     function enqueueTiles(path, size, colorScheme, options) {
-        for (let z = 0; z <= 3; z++) {
+        for (let z = 0; z <= RADAR_PREFETCH_MAX_Z; z++) {
             const maxCoord = Math.pow(2, z);
             for (let x = 0; x < maxCoord; x++) {
                 for (let y = 0; y < maxCoord; y++) {
@@ -147,14 +171,14 @@ function queuePrefetch(metadata) {
 
     if (metadata.radar) {
         if (metadata.radar.past) {
-            metadata.radar.past.forEach(frame => enqueueTiles(frame.path, 512, 2, '1_1'));
+            metadata.radar.past.slice(-RADAR_PREFETCH_FRAME_LIMIT).forEach(frame => enqueueTiles(frame.path, 512, 2, '1_1'));
         }
         if (metadata.radar.nowcast) {
-            metadata.radar.nowcast.forEach(frame => enqueueTiles(frame.path, 512, 2, '1_1'));
+            metadata.radar.nowcast.slice(-RADAR_PREFETCH_FRAME_LIMIT).forEach(frame => enqueueTiles(frame.path, 512, 2, '1_1'));
         }
     }
     if (metadata.satellite && metadata.satellite.infrared) {
-        metadata.satellite.infrared.forEach(frame => enqueueTiles(frame.path, 256, 0, '0_0'));
+        metadata.satellite.infrared.slice(-1).forEach(frame => enqueueTiles(frame.path, 256, 0, '0_0'));
     }
 
     processPrefetchQueue();
@@ -226,7 +250,11 @@ app.get('/api/radar/tile/*', async (req, res) => {
     try {
         const response = await fetch(targetUrl);
         if (!response.ok) {
-            console.error(`[Radar Proxy] Tile fetch failed: ${response.status} ${response.statusText} -> ${targetUrl}`);
+            if (response.status === 429) {
+                recordRadar429('Proxy', targetUrl);
+            } else {
+                console.error(`[Radar Proxy] Tile fetch failed: ${response.status} ${response.statusText} -> ${targetUrl}`);
+            }
             return res.status(response.status).end();
         }
         
@@ -278,6 +306,9 @@ let lastBroadcastAt = 0;
 let isShuttingDown = false;
 let decodeErrorsInWindow = 0;
 let decodeWindowStartedAt = Date.now();
+let totalUpstreamMessages = 0;
+let lastUpstreamMessageAt = 0;
+let totalBroadcastStrikes = 0;
 
 function shouldLogDecodeError() {
     const now = Date.now();
@@ -368,6 +399,7 @@ function broadcastStrike(lat, lon, timestamp) {
 
     addStrikeToCacheWithTimestamp(lat, lon, timestamp);
     lastBroadcastAt = now;
+    totalBroadcastStrikes += 1;
 
     const payload = JSON.stringify({ type: 'strike', lat, lon, timestamp });
     wss.clients.forEach(client => {
@@ -439,6 +471,8 @@ function connectToBlitzortungEndpoint(url) {
 
     wsBlitz.on('message', (data) => {
         state.lastMessageAt = Date.now();
+        totalUpstreamMessages += 1;
+        lastUpstreamMessageAt = state.lastMessageAt;
         try {
             const decodedText = decodeBlitzortung(data.toString('utf8'));
             const strike = JSON.parse(decodedText);
@@ -487,7 +521,31 @@ function connectToBlitzortungEndpoint(url) {
 }
 
 logInfo(`[Blitzortung] Using endpoints: ${ACTIVE_BLITZ_ENDPOINTS.join(', ')}`);
+logInfo(`[Radar Cache] Prefetch ${RADAR_PREFETCH_ENABLED ? 'enabled' : 'disabled'} (maxZ=${RADAR_PREFETCH_MAX_Z}, frameLimit=${RADAR_PREFETCH_FRAME_LIMIT}).`);
 ACTIVE_BLITZ_ENDPOINTS.forEach(connectToBlitzortungEndpoint);
+
+app.get('/api/lightning/status', (req, res) => {
+    const now = Date.now();
+    const connectedUpstreams = Array.from(upstreamState.values()).filter(
+        state => state.ws && state.ws.readyState === WebSocket.OPEN
+    ).length;
+    const quarantinedUpstreams = Array.from(upstreamState.values()).filter(
+        state => state.disabledUntil && state.disabledUntil > now
+    ).length;
+
+    res.json({
+        connectedUpstreams,
+        configuredUpstreams: ACTIVE_BLITZ_ENDPOINTS.length,
+        quarantinedUpstreams,
+        totalUpstreamMessages,
+        totalBroadcastStrikes,
+        strikeCacheSize: strikeCache.length,
+        lastUpstreamMessageAt,
+        lastBroadcastAt,
+        secondsSinceLastUpstreamMessage: lastUpstreamMessageAt ? Math.floor((now - lastUpstreamMessageAt) / 1000) : null,
+        secondsSinceLastBroadcast: lastBroadcastAt ? Math.floor((now - lastBroadcastAt) / 1000) : null
+    });
+});
 
 setInterval(() => {
     const now = Date.now();
@@ -534,9 +592,11 @@ setInterval(() => {
         state => state.disabledUntil && state.disabledUntil > Date.now()
     ).length;
     const secondsSinceLastStrike = lastBroadcastAt ? Math.floor((Date.now() - lastBroadcastAt) / 1000) : 'n/a';
+    const secondsSinceLastUpstreamMessage = lastUpstreamMessageAt ? Math.floor((Date.now() - lastUpstreamMessageAt) / 1000) : 'n/a';
     logInfo(
         `[Status] Upstreams: ${connectedUpstreams}/${ACTIVE_BLITZ_ENDPOINTS.length}. Quarantined: ${quarantinedUpstreams}. Active clients: ${wss.clients.size}. ` +
-        `Tiles: ${tileCache.size}. Strikes: ${strikeCache.length}. Last strike: ${secondsSinceLastStrike}s ago.`
+        `Tiles: ${tileCache.size}. Strikes: ${strikeCache.length}. Upstream msgs: ${totalUpstreamMessages}. ` +
+        `Last upstream msg: ${secondsSinceLastUpstreamMessage}s ago. Last strike: ${secondsSinceLastStrike}s ago.`
     );
 
     if (connectedUpstreams === 0) {
