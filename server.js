@@ -289,6 +289,17 @@ function shouldLogDecodeError() {
     return decodeErrorsInWindow <= BLITZ_DECODE_ERROR_LOG_LIMIT;
 }
 
+function toFiniteNumber(value) {
+    if (typeof value === 'number') {
+        return Number.isFinite(value) ? value : NaN;
+    }
+    if (typeof value === 'string') {
+        const parsed = Number.parseFloat(value);
+        return Number.isFinite(parsed) ? parsed : NaN;
+    }
+    return NaN;
+}
+
 function isTlsCertificateError(err) {
     if (!err) return false;
     if (err.code && typeof err.code === 'string' && err.code.startsWith('ERR_TLS_')) {
@@ -305,11 +316,28 @@ function isUnsupportedWebSocketEndpointError(err) {
 }
 
 function extractStrikeTimestamp(strike) {
+    const now = Date.now();
     const candidates = [strike.timestamp, strike.time, strike.ts, strike.utc];
     for (const candidate of candidates) {
-        if (!Number.isFinite(candidate)) continue;
-        if (candidate > 1e12) return candidate;
-        if (candidate > 1e9) return candidate * 1000;
+        const numeric = toFiniteNumber(candidate);
+        if (!Number.isFinite(numeric)) continue;
+
+        let ts = numeric;
+        // Handle ns/us/sec/ms timestamp variants from different feeds.
+        if (ts > 1e17) {
+            ts = Math.floor(ts / 1e6);
+        } else if (ts > 1e14) {
+            ts = Math.floor(ts / 1000);
+        } else if (ts > 1e9 && ts < 1e11) {
+            ts = Math.floor(ts * 1000);
+        }
+
+        // Keep timestamps plausible for rendering; outliers are replaced with now.
+        if (ts < now - MAX_STRIKE_AGE_MS || ts > now + 5 * 60 * 1000) {
+            return now;
+        }
+
+        return ts;
     }
     return Date.now();
 }
@@ -415,12 +443,14 @@ function connectToBlitzortungEndpoint(url) {
             const decodedText = decodeBlitzortung(data.toString('utf8'));
             const strike = JSON.parse(decodedText);
 
-            if (!strike || !Number.isFinite(strike.lat) || !Number.isFinite(strike.lon)) {
+            const lat = toFiniteNumber(strike && strike.lat);
+            const lon = toFiniteNumber(strike && strike.lon);
+            if (!strike || !Number.isFinite(lat) || !Number.isFinite(lon)) {
                 return;
             }
 
             const timestamp = extractStrikeTimestamp(strike);
-            broadcastStrike(strike.lat, strike.lon, timestamp);
+            broadcastStrike(lat, lon, timestamp);
         } catch (err) {
             if (shouldLogDecodeError()) {
                 logError(`[Blitzortung] Decode/parse error from ${url}`, err);
