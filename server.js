@@ -15,6 +15,7 @@ const BLITZ_STALE_MS = 45000;
 const BLITZ_BASE_RECONNECT_MS = 2000;
 const BLITZ_MAX_RECONNECT_MS = 60000;
 const BLITZ_TLS_QUARANTINE_MS = 6 * 60 * 60 * 1000;
+const BLITZ_UNSUPPORTED_ENDPOINT_QUARANTINE_MS = 24 * 60 * 60 * 1000;
 const BLITZ_DECODE_ERROR_LOG_WINDOW_MS = 60000;
 const BLITZ_DECODE_ERROR_LOG_LIMIT = 8;
 
@@ -258,7 +259,6 @@ function decodeBlitzortung(b) {
 }
 
 const DEFAULT_BLITZ_ENDPOINTS = [
-    'wss://maps.blitzortung.org/',
     'wss://ws1.blitzortung.org/',
     'wss://ws2.blitzortung.org/',
     'wss://ws7.blitzortung.org/',
@@ -296,6 +296,12 @@ function isTlsCertificateError(err) {
     }
     const msg = (err.message || '').toLowerCase();
     return msg.includes('certificate has expired') || msg.includes('certificate') || msg.includes('altnames');
+}
+
+function isUnsupportedWebSocketEndpointError(err) {
+    if (!err || !err.message) return false;
+    const msg = err.message.toLowerCase();
+    return msg.includes('unexpected server response: 200') || msg.includes('unexpected server response: 301') || msg.includes('unexpected server response: 302');
 }
 
 function extractStrikeTimestamp(strike) {
@@ -438,6 +444,11 @@ function connectToBlitzortungEndpoint(url) {
             logWarn(
                 `[Blitzortung] Quarantining ${url} for ${BLITZ_TLS_QUARANTINE_MS}ms due to TLS/certificate error ` +
                 `(count=${state.tlsErrorCount}).`
+            );
+        } else if (isUnsupportedWebSocketEndpointError(err)) {
+            state.disabledUntil = Date.now() + BLITZ_UNSUPPORTED_ENDPOINT_QUARANTINE_MS;
+            logWarn(
+                `[Blitzortung] Quarantining ${url} for ${BLITZ_UNSUPPORTED_ENDPOINT_QUARANTINE_MS}ms due to non-websocket HTTP response.`
             );
         }
 
