@@ -262,6 +262,7 @@
             }
         }).setView([50.29, 18.66], 5);
 
+        map.options.doubleTapDragZoom = 'center';
         window.__weerweatherMap = map;
         const mapContainer = map.getContainer();
         let lastTapTime = 0;
