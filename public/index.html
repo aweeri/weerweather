@@ -29,8 +29,8 @@
         }
 
         body, html { margin: 0; padding: 0; height: 100%; background: var(--bg-panel); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow: hidden; }
-        #map { height: 100vh; width: 100vw; }
-        .leaflet-container { background: var(--bg-panel); }
+        #map { height: 100vh; width: 100vw; touch-action: none; }
+        .leaflet-container { background: var(--bg-panel); touch-action: none; }
         
         #logo {
             position: absolute;
@@ -244,8 +244,6 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/leaflet-doubletapdrag@0.3.2/Leaflet.DoubleTapDrag.js"></script>
-    <script src="https://unpkg.com/leaflet-doubletapdragzoom@0.3.2/Leaflet.DoubleTapDragZoom.js"></script>
     <script src="https://unpkg.com/@joergdietrich/leaflet.terminator"></script>
     <script>
         if (!L.Map || !L.Map.mergeOptions) {
@@ -263,12 +261,61 @@
                 reverse: true
             }
         }).setView([50.29, 18.66], 5);
-        if (map.doubleTapDragZoom && map.doubleTapDragZoom.enable) {
-            map.doubleTapDragZoom.enable();
-            console.info('Leaflet.DoubleTapDragZoom enabled.');
-        } else {
-            console.error('Leaflet.DoubleTapDragZoom handler missing on map instance.');
+
+        window.__weerweatherMap = map;
+        const mapContainer = map.getContainer();
+        let lastTapTime = 0;
+        let activeDoubleTapGesture = null;
+
+        function resetDoubleTapGesture() {
+            activeDoubleTapGesture = null;
         }
+
+        mapContainer.addEventListener('touchstart', (event) => {
+            if (!event.touches || event.touches.length !== 1) {
+                resetDoubleTapGesture();
+                return;
+            }
+
+            const touch = event.touches[0];
+            const now = Date.now();
+            const isDoubleTap = now - lastTapTime < 280;
+            lastTapTime = now;
+
+            if (!isDoubleTap) {
+                resetDoubleTapGesture();
+                return;
+            }
+
+            activeDoubleTapGesture = {
+                startY: touch.clientY,
+                startZoom: map.getZoom(),
+                center: map.getCenter()
+            };
+            map.stop();
+        }, { passive: false });
+
+        mapContainer.addEventListener('touchmove', (event) => {
+            if (!activeDoubleTapGesture || !event.touches || event.touches.length !== 1) {
+                return;
+            }
+
+            const touch = event.touches[0];
+            const deltaY = touch.clientY - activeDoubleTapGesture.startY;
+            const scale = Math.exp(deltaY / 220);
+            const targetZoom = map.getScaleZoom(scale, activeDoubleTapGesture.startZoom);
+            const clampedZoom = map._limitZoom(targetZoom);
+
+            if (Number.isFinite(clampedZoom)) {
+                map.setView(activeDoubleTapGesture.center, clampedZoom, { animate: false });
+            }
+
+            event.preventDefault();
+        }, { passive: false });
+
+        mapContainer.addEventListener('touchend', resetDoubleTapGesture, { passive: false });
+        mapContainer.addEventListener('touchcancel', resetDoubleTapGesture, { passive: false });
+
         let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
         const userLocationLayer = L.layerGroup().addTo(map);
         let userLocationMarker = null;
