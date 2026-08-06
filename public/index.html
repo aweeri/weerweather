@@ -247,6 +247,7 @@
     <script src="https://unpkg.com/@joergdietrich/leaflet.terminator"></script>
     <script>
         const map = L.map('map', { zoomControl: false, attributionControl: false }).setView([50.29, 18.66], 5);
+        map.doubleClickZoom.disable();
         let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
         const userLocationLayer = L.layerGroup().addTo(map);
         let userLocationMarker = null;
@@ -350,6 +351,159 @@
         }
 
         bootUserLocation();
+
+        // Google Maps-like gesture: double-tap and hold, then drag vertically to zoom.
+        function installDoubleTapDragZoom(targetMap) {
+            const container = targetMap.getContainer();
+            const DOUBLE_TAP_MAX_DELAY_MS = 300;
+            const TAP_MAX_MOVE_PX = 18;
+            const HOLD_ACTIVATE_DELAY_MS = 90;
+            const PIXELS_PER_ZOOM_STEP = 70;
+            const MIN_MOVE_FOR_ZOOM_PX = 4;
+
+            let lastTapAt = 0;
+            let lastTapX = 0;
+            let lastTapY = 0;
+
+            let firstTouchId = null;
+            let touchStartX = 0;
+            let touchStartY = 0;
+            let touchStartAt = 0;
+
+            let holdTimer = null;
+            let gestureActive = false;
+            let gestureAnchor = null;
+            let gestureStartY = 0;
+            let gestureBaseZoom = 0;
+            let gestureLastAppliedZoom = null;
+
+            function resetGestureState() {
+                if (holdTimer) {
+                    clearTimeout(holdTimer);
+                    holdTimer = null;
+                }
+                gestureActive = false;
+                gestureAnchor = null;
+                gestureLastAppliedZoom = null;
+                firstTouchId = null;
+            }
+
+            container.addEventListener('touchstart', (event) => {
+                if (event.touches.length !== 1) {
+                    resetGestureState();
+                    return;
+                }
+
+                const touch = event.touches[0];
+                firstTouchId = touch.identifier;
+                touchStartX = touch.clientX;
+                touchStartY = touch.clientY;
+                touchStartAt = Date.now();
+
+                const now = Date.now();
+                const dt = now - lastTapAt;
+                const dx = touch.clientX - lastTapX;
+                const dy = touch.clientY - lastTapY;
+                const moveSq = dx * dx + dy * dy;
+
+                const isSecondTap = dt > 0 && dt <= DOUBLE_TAP_MAX_DELAY_MS && moveSq <= TAP_MAX_MOVE_PX * TAP_MAX_MOVE_PX;
+                if (!isSecondTap) return;
+
+                if (holdTimer) clearTimeout(holdTimer);
+                holdTimer = setTimeout(() => {
+                    if (!firstTouchId || event.touches.length !== 1) return;
+                    gestureActive = true;
+                    gestureAnchor = targetMap.mouseEventToContainerPoint({ clientX: touch.clientX, clientY: touch.clientY });
+                    gestureStartY = touch.clientY;
+                    gestureBaseZoom = targetMap.getZoom();
+                    gestureLastAppliedZoom = gestureBaseZoom;
+                    targetMap.dragging.disable();
+                    targetMap.touchZoom.disable();
+                }, HOLD_ACTIVATE_DELAY_MS);
+            }, { passive: false });
+
+            container.addEventListener('touchmove', (event) => {
+                if (event.touches.length !== 1) {
+                    resetGestureState();
+                    return;
+                }
+
+                const touch = event.touches[0];
+                if (firstTouchId !== touch.identifier) return;
+
+                if (gestureActive) {
+                    event.preventDefault();
+
+                    const deltaY = gestureStartY - touch.clientY;
+                    if (Math.abs(deltaY) < MIN_MOVE_FOR_ZOOM_PX) return;
+
+                    const rawZoom = gestureBaseZoom + (deltaY / PIXELS_PER_ZOOM_STEP);
+                    const clampedZoom = Math.max(targetMap.getMinZoom(), Math.min(targetMap.getMaxZoom(), rawZoom));
+
+                    // Avoid redundant zoom commands while dragging.
+                    if (gestureLastAppliedZoom !== null && Math.abs(clampedZoom - gestureLastAppliedZoom) < 0.01) {
+                        return;
+                    }
+
+                    targetMap.setZoomAround(gestureAnchor, clampedZoom, { animate: false });
+                    gestureLastAppliedZoom = clampedZoom;
+                    return;
+                }
+
+                const driftX = touch.clientX - touchStartX;
+                const driftY = touch.clientY - touchStartY;
+                const driftSq = driftX * driftX + driftY * driftY;
+                if (driftSq > TAP_MAX_MOVE_PX * TAP_MAX_MOVE_PX && holdTimer) {
+                    clearTimeout(holdTimer);
+                    holdTimer = null;
+                }
+            }, { passive: false });
+
+            container.addEventListener('touchend', (event) => {
+                const now = Date.now();
+                if (!gestureActive) {
+                    const touchDuration = now - touchStartAt;
+                    const lastTouch = event.changedTouches[0];
+                    if (lastTouch && touchDuration < DOUBLE_TAP_MAX_DELAY_MS) {
+                        lastTapAt = now;
+                        lastTapX = lastTouch.clientX;
+                        lastTapY = lastTouch.clientY;
+                    }
+                }
+
+                if (holdTimer) {
+                    clearTimeout(holdTimer);
+                    holdTimer = null;
+                }
+
+                if (gestureActive) {
+                    targetMap.dragging.enable();
+                    targetMap.touchZoom.enable();
+                }
+
+                gestureActive = false;
+                gestureAnchor = null;
+                gestureLastAppliedZoom = null;
+                firstTouchId = null;
+            }, { passive: false });
+
+            container.addEventListener('touchcancel', () => {
+                if (holdTimer) {
+                    clearTimeout(holdTimer);
+                    holdTimer = null;
+                }
+                if (gestureActive) {
+                    targetMap.dragging.enable();
+                    targetMap.touchZoom.enable();
+                }
+                gestureActive = false;
+                gestureAnchor = null;
+                gestureLastAppliedZoom = null;
+                firstTouchId = null;
+            }, { passive: false });
+        }
+
+        installDoubleTapDragZoom(map);
 
         // Audio Engine
         let audioCtx = null;
