@@ -357,9 +357,11 @@
             const container = targetMap.getContainer();
             const DOUBLE_TAP_MAX_DELAY_MS = 300;
             const TAP_MAX_MOVE_PX = 18;
-            const HOLD_ACTIVATE_DELAY_MS = 90;
-            const PIXELS_PER_ZOOM_STEP = 70;
+            const HOLD_ACTIVATE_DELAY_MS = 120;
+            const PIXELS_PER_ZOOM_STEP = 220;
             const MIN_MOVE_FOR_ZOOM_PX = 4;
+            const ZOOM_SMOOTHING = 0.2;
+            const MIN_ZOOM_DELTA = 0.005;
 
             let lastTapAt = 0;
             let lastTapX = 0;
@@ -373,10 +375,45 @@
             let holdTimer = null;
             let gestureActive = false;
             let secondTapPending = false;
-            let gestureAnchor = null;
+            let gestureFixedCenter = null;
             let gestureStartY = 0;
             let gestureBaseZoom = 0;
+            let gestureTargetZoom = 0;
+            let gestureCurrentZoom = 0;
             let gestureLastAppliedZoom = null;
+            let gestureRaf = null;
+
+            function stopGestureAnimation() {
+                if (gestureRaf !== null) {
+                    cancelAnimationFrame(gestureRaf);
+                    gestureRaf = null;
+                }
+            }
+
+            function applySmoothedZoom() {
+                if (!gestureActive || !gestureFixedCenter) {
+                    stopGestureAnimation();
+                    return;
+                }
+
+                const diff = gestureTargetZoom - gestureCurrentZoom;
+                if (Math.abs(diff) < MIN_ZOOM_DELTA) {
+                    gestureCurrentZoom = gestureTargetZoom;
+                } else {
+                    gestureCurrentZoom += diff * ZOOM_SMOOTHING;
+                }
+
+                if (gestureLastAppliedZoom === null || Math.abs(gestureCurrentZoom - gestureLastAppliedZoom) >= MIN_ZOOM_DELTA) {
+                    targetMap.setView(gestureFixedCenter, gestureCurrentZoom, { animate: false });
+                    gestureLastAppliedZoom = gestureCurrentZoom;
+                }
+
+                if (Math.abs(gestureTargetZoom - gestureCurrentZoom) >= MIN_ZOOM_DELTA) {
+                    gestureRaf = requestAnimationFrame(applySmoothedZoom);
+                } else {
+                    stopGestureAnimation();
+                }
+            }
 
             function resetGestureState() {
                 if (holdTimer) {
@@ -385,9 +422,14 @@
                 }
                 gestureActive = false;
                 secondTapPending = false;
-                gestureAnchor = null;
+                gestureFixedCenter = null;
                 gestureLastAppliedZoom = null;
+                gestureTargetZoom = 0;
+                gestureCurrentZoom = 0;
                 firstTouchId = null;
+                targetMap.dragging.enable();
+                targetMap.touchZoom.enable();
+                stopGestureAnimation();
             }
 
             container.addEventListener('touchstart', (event) => {
@@ -413,17 +455,19 @@
 
                 secondTapPending = true;
                 event.preventDefault();
+                targetMap.dragging.disable();
+                targetMap.touchZoom.disable();
 
                 if (holdTimer) clearTimeout(holdTimer);
                 holdTimer = setTimeout(() => {
                     if (firstTouchId === null || !secondTapPending) return;
                     gestureActive = true;
-                    gestureAnchor = targetMap.mouseEventToContainerPoint({ clientX: touch.clientX, clientY: touch.clientY });
+                    gestureFixedCenter = targetMap.getCenter();
                     gestureStartY = touch.clientY;
                     gestureBaseZoom = targetMap.getZoom();
+                    gestureTargetZoom = gestureBaseZoom;
+                    gestureCurrentZoom = gestureBaseZoom;
                     gestureLastAppliedZoom = gestureBaseZoom;
-                    targetMap.dragging.disable();
-                    targetMap.touchZoom.disable();
                 }, HOLD_ACTIVATE_DELAY_MS);
             }, { passive: false });
 
@@ -445,13 +489,10 @@
                     const rawZoom = gestureBaseZoom + (deltaY / PIXELS_PER_ZOOM_STEP);
                     const clampedZoom = Math.max(targetMap.getMinZoom(), Math.min(targetMap.getMaxZoom(), rawZoom));
 
-                    // Avoid redundant zoom commands while dragging.
-                    if (gestureLastAppliedZoom !== null && Math.abs(clampedZoom - gestureLastAppliedZoom) < 0.01) {
-                        return;
+                    gestureTargetZoom = clampedZoom;
+                    if (gestureRaf === null) {
+                        gestureRaf = requestAnimationFrame(applySmoothedZoom);
                     }
-
-                    targetMap.setZoomAround(gestureAnchor, clampedZoom, { animate: false });
-                    gestureLastAppliedZoom = clampedZoom;
                     return;
                 }
 
@@ -466,6 +507,8 @@
                     clearTimeout(holdTimer);
                     holdTimer = null;
                     secondTapPending = false;
+                    targetMap.dragging.enable();
+                    targetMap.touchZoom.enable();
                 }
             }, { passive: false });
 
@@ -487,14 +530,19 @@
                 }
 
                 if (gestureActive) {
+                    gestureCurrentZoom = gestureTargetZoom;
+                    if (gestureFixedCenter) {
+                        targetMap.setView(gestureFixedCenter, gestureCurrentZoom, { animate: false });
+                    }
                     targetMap.dragging.enable();
                     targetMap.touchZoom.enable();
                 }
 
                 gestureActive = false;
                 secondTapPending = false;
-                gestureAnchor = null;
+                gestureFixedCenter = null;
                 gestureLastAppliedZoom = null;
+                stopGestureAnimation();
                 firstTouchId = null;
             }, { passive: false });
 
@@ -509,8 +557,9 @@
                 }
                 gestureActive = false;
                 secondTapPending = false;
-                gestureAnchor = null;
+                gestureFixedCenter = null;
                 gestureLastAppliedZoom = null;
+                stopGestureAnimation();
                 firstTouchId = null;
             }, { passive: false });
         }
