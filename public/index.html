@@ -244,13 +244,18 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-    <script src="https://unpkg.com/leaflet-doubletapdrag@0.3.2"></script>
-    <script src="https://unpkg.com/leaflet-doubletapdragzoom@0.3.2"></script>
+    <script src="https://unpkg.com/leaflet-doubletapdrag@0.3.2/Leaflet.DoubleTapDrag.js"></script>
+    <script src="https://unpkg.com/leaflet-doubletapdragzoom@0.3.2/Leaflet.DoubleTapDragZoom.js"></script>
     <script src="https://unpkg.com/@joergdietrich/leaflet.terminator"></script>
     <script>
+        if (!L.Map || !L.Map.mergeOptions) {
+            console.error('Leaflet failed to initialize before plugins.');
+        }
+
         const map = L.map('map', {
             zoomControl: false,
             attributionControl: false,
+            doubleClickZoom: false,
             zoomSnap: 0.01,
             zoomDelta: 0.25,
             doubleTapDragZoom: 'center',
@@ -258,6 +263,12 @@
                 reverse: true
             }
         }).setView([50.29, 18.66], 5);
+        if (map.doubleTapDragZoom && map.doubleTapDragZoom.enable) {
+            map.doubleTapDragZoom.enable();
+            console.info('Leaflet.DoubleTapDragZoom enabled.');
+        } else {
+            console.error('Leaflet.DoubleTapDragZoom handler missing on map instance.');
+        }
         let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
         const userLocationLayer = L.layerGroup().addTo(map);
         let userLocationMarker = null;
