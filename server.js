@@ -14,6 +14,8 @@ const CLIENT_PING_INTERVAL_MS = 30000;
 const BLITZ_STALE_MS = 45000;
 const BLITZ_BASE_RECONNECT_MS = 2000;
 const BLITZ_MAX_RECONNECT_MS = 60000;
+const BLITZ_DECODE_ERROR_LOG_WINDOW_MS = 60000;
+const BLITZ_DECODE_ERROR_LOG_LIMIT = 8;
 
 // --- 0. Persistent Disk Storage Setup ---
 const DATA_DIR = path.join(__dirname, 'data');
@@ -68,6 +70,26 @@ let metadataCache = null;
 let metadataTimestamp = 0;
 const METADATA_TTL = 2 * 60 * 1000;
 const tileCache = new Map();
+
+function logInfo(message) {
+    console.log(`[Info] ${message}`);
+}
+
+function logWarn(message) {
+    console.warn(`[Warn] ${message}`);
+}
+
+function logError(message, err) {
+    if (err && err.stack) {
+        console.error(`[Error] ${message}\n${err.stack}`);
+        return;
+    }
+    if (err && err.message) {
+        console.error(`[Error] ${message}: ${err.message}`);
+        return;
+    }
+    console.error(`[Error] ${message}`);
+}
 
 let prefetchQueue = [];
 let isPrefetching = false;
@@ -249,6 +271,18 @@ const recentStrikeKeys = new Map();
 const upstreamState = new Map();
 let lastBroadcastAt = 0;
 let isShuttingDown = false;
+let decodeErrorsInWindow = 0;
+let decodeWindowStartedAt = Date.now();
+
+function shouldLogDecodeError() {
+    const now = Date.now();
+    if (now - decodeWindowStartedAt >= BLITZ_DECODE_ERROR_LOG_WINDOW_MS) {
+        decodeWindowStartedAt = now;
+        decodeErrorsInWindow = 0;
+    }
+    decodeErrorsInWindow += 1;
+    return decodeErrorsInWindow <= BLITZ_DECODE_ERROR_LOG_LIMIT;
+}
 
 function extractStrikeTimestamp(strike) {
     const candidates = [strike.timestamp, strike.time, strike.ts, strike.utc];
@@ -306,7 +340,7 @@ function scheduleReconnect(state, reason) {
         connectToBlitzortungEndpoint(state.url);
     }, waitMs);
 
-    console.warn(`[Blitzortung] Reconnecting ${state.url} in ${waitMs}ms (${reason}).`);
+    logWarn(`[Blitzortung] Reconnecting ${state.url} in ${waitMs}ms (${reason}).`);
 }
 
 function connectToBlitzortungEndpoint(url) {
@@ -333,7 +367,7 @@ function connectToBlitzortungEndpoint(url) {
         state.backoffMs = BLITZ_BASE_RECONNECT_MS;
         state.connectedAt = Date.now();
         state.lastMessageAt = Date.now();
-        console.log(`[Blitzortung] Connected to ${url}.`);
+        logInfo(`[Blitzortung] Connected to ${url}.`);
         wsBlitz.send(JSON.stringify({ a: 111 }));
     });
 
@@ -349,7 +383,11 @@ function connectToBlitzortungEndpoint(url) {
 
             const timestamp = extractStrikeTimestamp(strike);
             broadcastStrike(strike.lat, strike.lon, timestamp);
-        } catch (err) {}
+        } catch (err) {
+            if (shouldLogDecodeError()) {
+                logError(`[Blitzortung] Decode/parse error from ${url}`, err);
+            }
+        }
     });
 
     wsBlitz.on('close', () => {
@@ -359,7 +397,8 @@ function connectToBlitzortungEndpoint(url) {
         scheduleReconnect(state, 'socket closed');
     });
 
-    wsBlitz.on('error', () => {
+    wsBlitz.on('error', (err) => {
+        logError(`[Blitzortung] Socket error on ${url}`, err);
         wsBlitz.close();
     });
 }
@@ -371,7 +410,7 @@ setInterval(() => {
     upstreamState.forEach((state) => {
         if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
         if (now - state.lastMessageAt > BLITZ_STALE_MS) {
-            console.warn(`[Blitzortung] Stale feed detected on ${state.url}; forcing reconnect.`);
+            logWarn(`[Blitzortung] Stale feed detected on ${state.url}; forcing reconnect.`);
             state.ws.terminate();
             state.ws = null;
             scheduleReconnect(state, 'stale feed watchdog');
@@ -408,10 +447,17 @@ setInterval(() => {
         state => state.ws && state.ws.readyState === WebSocket.OPEN
     ).length;
     const secondsSinceLastStrike = lastBroadcastAt ? Math.floor((Date.now() - lastBroadcastAt) / 1000) : 'n/a';
-    console.log(
+    logInfo(
         `[Status] Upstreams: ${connectedUpstreams}/${BLITZ_ENDPOINTS.length}. Active clients: ${wss.clients.size}. ` +
         `Tiles: ${tileCache.size}. Strikes: ${strikeCache.length}. Last strike: ${secondsSinceLastStrike}s ago.`
     );
+
+    if (connectedUpstreams === 0) {
+        logError('[Status] All Blitzortung upstream sockets are disconnected.');
+    }
+    if (typeof secondsSinceLastStrike === 'number' && secondsSinceLastStrike > 300) {
+        logWarn(`[Status] No strikes broadcast in ${secondsSinceLastStrike}s.`);
+    }
 }, 60000);
 
 function shutdownGracefully(signalName) {
@@ -440,6 +486,18 @@ function shutdownGracefully(signalName) {
 
 process.on('SIGINT', () => shutdownGracefully('SIGINT'));
 process.on('SIGTERM', () => shutdownGracefully('SIGTERM'));
+
+process.on('uncaughtException', (err) => {
+    logError('Uncaught exception', err);
+});
+
+process.on('unhandledRejection', (reason) => {
+    if (reason instanceof Error) {
+        logError('Unhandled rejection', reason);
+        return;
+    }
+    logError(`Unhandled rejection: ${JSON.stringify(reason)}`);
+});
 
 server.listen(3000, () => {
     console.log('Weather dashboard serving on port 3000');
