@@ -14,6 +14,7 @@ const CLIENT_PING_INTERVAL_MS = 30000;
 const BLITZ_STALE_MS = 45000;
 const BLITZ_BASE_RECONNECT_MS = 2000;
 const BLITZ_MAX_RECONNECT_MS = 60000;
+const BLITZ_TLS_QUARANTINE_MS = 6 * 60 * 60 * 1000;
 const BLITZ_DECODE_ERROR_LOG_WINDOW_MS = 60000;
 const BLITZ_DECODE_ERROR_LOG_LIMIT = 8;
 
@@ -256,16 +257,20 @@ function decodeBlitzortung(b) {
     return g.join("");
 }
 
-const BLITZ_ENDPOINTS = [
+const DEFAULT_BLITZ_ENDPOINTS = [
+    'wss://maps.blitzortung.org/',
     'wss://ws1.blitzortung.org/',
     'wss://ws2.blitzortung.org/',
-    'wss://ws3.blitzortung.org/',
-    'wss://ws4.blitzortung.org/',
-    'wss://ws5.blitzortung.org/',
-    'wss://ws6.blitzortung.org/',
     'wss://ws7.blitzortung.org/',
     'wss://ws8.blitzortung.org/'
 ];
+
+const BLITZ_ENDPOINTS = (process.env.BLITZ_ENDPOINTS || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+const ACTIVE_BLITZ_ENDPOINTS = BLITZ_ENDPOINTS.length > 0 ? BLITZ_ENDPOINTS : DEFAULT_BLITZ_ENDPOINTS;
 
 const recentStrikeKeys = new Map();
 const upstreamState = new Map();
@@ -282,6 +287,15 @@ function shouldLogDecodeError() {
     }
     decodeErrorsInWindow += 1;
     return decodeErrorsInWindow <= BLITZ_DECODE_ERROR_LOG_LIMIT;
+}
+
+function isTlsCertificateError(err) {
+    if (!err) return false;
+    if (err.code && typeof err.code === 'string' && err.code.startsWith('ERR_TLS_')) {
+        return true;
+    }
+    const msg = (err.message || '').toLowerCase();
+    return msg.includes('certificate has expired') || msg.includes('certificate') || msg.includes('altnames');
 }
 
 function extractStrikeTimestamp(strike) {
@@ -332,6 +346,16 @@ function broadcastStrike(lat, lon, timestamp) {
 function scheduleReconnect(state, reason) {
     if (isShuttingDown) return;
 
+    const now = Date.now();
+    if (state.disabledUntil && state.disabledUntil > now) {
+        const waitMs = state.disabledUntil - now;
+        setTimeout(() => {
+            connectToBlitzortungEndpoint(state.url);
+        }, waitMs);
+        logWarn(`[Blitzortung] ${state.url} is quarantined for TLS issues; retrying in ${waitMs}ms.`);
+        return;
+    }
+
     const jitterMs = Math.floor(Math.random() * 1000);
     const waitMs = Math.min(state.backoffMs, BLITZ_MAX_RECONNECT_MS) + jitterMs;
     state.backoffMs = Math.min(state.backoffMs * 2, BLITZ_MAX_RECONNECT_MS);
@@ -351,9 +375,15 @@ function connectToBlitzortungEndpoint(url) {
             ws: null,
             backoffMs: BLITZ_BASE_RECONNECT_MS,
             connectedAt: 0,
-            lastMessageAt: 0
+            lastMessageAt: 0,
+            disabledUntil: 0,
+            tlsErrorCount: 0
         };
         upstreamState.set(url, state);
+    }
+
+    if (state.disabledUntil && state.disabledUntil > Date.now()) {
+        return;
     }
 
     if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
@@ -367,6 +397,8 @@ function connectToBlitzortungEndpoint(url) {
         state.backoffMs = BLITZ_BASE_RECONNECT_MS;
         state.connectedAt = Date.now();
         state.lastMessageAt = Date.now();
+        state.disabledUntil = 0;
+        state.tlsErrorCount = 0;
         logInfo(`[Blitzortung] Connected to ${url}.`);
         wsBlitz.send(JSON.stringify({ a: 111 }));
     });
@@ -399,11 +431,22 @@ function connectToBlitzortungEndpoint(url) {
 
     wsBlitz.on('error', (err) => {
         logError(`[Blitzortung] Socket error on ${url}`, err);
+
+        if (isTlsCertificateError(err)) {
+            state.tlsErrorCount += 1;
+            state.disabledUntil = Date.now() + BLITZ_TLS_QUARANTINE_MS;
+            logWarn(
+                `[Blitzortung] Quarantining ${url} for ${BLITZ_TLS_QUARANTINE_MS}ms due to TLS/certificate error ` +
+                `(count=${state.tlsErrorCount}).`
+            );
+        }
+
         wsBlitz.close();
     });
 }
 
-BLITZ_ENDPOINTS.forEach(connectToBlitzortungEndpoint);
+logInfo(`[Blitzortung] Using endpoints: ${ACTIVE_BLITZ_ENDPOINTS.join(', ')}`);
+ACTIVE_BLITZ_ENDPOINTS.forEach(connectToBlitzortungEndpoint);
 
 setInterval(() => {
     const now = Date.now();
@@ -446,9 +489,12 @@ setInterval(() => {
     const connectedUpstreams = Array.from(upstreamState.values()).filter(
         state => state.ws && state.ws.readyState === WebSocket.OPEN
     ).length;
+    const quarantinedUpstreams = Array.from(upstreamState.values()).filter(
+        state => state.disabledUntil && state.disabledUntil > Date.now()
+    ).length;
     const secondsSinceLastStrike = lastBroadcastAt ? Math.floor((Date.now() - lastBroadcastAt) / 1000) : 'n/a';
     logInfo(
-        `[Status] Upstreams: ${connectedUpstreams}/${BLITZ_ENDPOINTS.length}. Active clients: ${wss.clients.size}. ` +
+        `[Status] Upstreams: ${connectedUpstreams}/${ACTIVE_BLITZ_ENDPOINTS.length}. Quarantined: ${quarantinedUpstreams}. Active clients: ${wss.clients.size}. ` +
         `Tiles: ${tileCache.size}. Strikes: ${strikeCache.length}. Last strike: ${secondsSinceLastStrike}s ago.`
     );
 
