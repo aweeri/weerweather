@@ -10,6 +10,11 @@ app.use(express.static('public'));
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+const CLIENT_PING_INTERVAL_MS = 30000;
+const BLITZ_STALE_MS = 45000;
+const BLITZ_BASE_RECONNECT_MS = 2000;
+const BLITZ_MAX_RECONNECT_MS = 60000;
+
 // --- 0. Persistent Disk Storage Setup ---
 const DATA_DIR = path.join(__dirname, 'data');
 if (!fs.existsSync(DATA_DIR)) {
@@ -46,17 +51,16 @@ function saveStrikesToDisk() {
 // Auto-save every 10 seconds just in case of a crash
 setInterval(saveStrikesToDisk, 10000);
 
-// Panic-save right before Docker kills the container during an Update
-process.on('SIGTERM', () => {
-    console.log('[Storage] Container updating... Saving lightning history to disk.');
-    saveStrikesToDisk();
-    process.exit(0);
-});
-
 function addStrikeToCache(lat, lon) {
     const now = Date.now();
     strikeCache.push({ lat, lon, timestamp: now });
     strikeCache = strikeCache.filter(s => now - s.timestamp <= MAX_STRIKE_AGE_MS);
+}
+
+function addStrikeToCacheWithTimestamp(lat, lon, timestamp) {
+    const safeTimestamp = Number.isFinite(timestamp) ? timestamp : Date.now();
+    strikeCache.push({ lat, lon, timestamp: safeTimestamp });
+    strikeCache = strikeCache.filter(s => safeTimestamp - s.timestamp <= MAX_STRIKE_AGE_MS);
 }
 
 // --- 2. RainViewer Reverse Proxy & Memory Cache ---
@@ -230,43 +234,212 @@ function decodeBlitzortung(b) {
     return g.join("");
 }
 
-function connectToBlitzortung() {
-    const wsBlitz = new WebSocket('wss://ws8.blitzortung.org/');
+const BLITZ_ENDPOINTS = [
+    'wss://ws1.blitzortung.org/',
+    'wss://ws2.blitzortung.org/',
+    'wss://ws3.blitzortung.org/',
+    'wss://ws4.blitzortung.org/',
+    'wss://ws5.blitzortung.org/',
+    'wss://ws6.blitzortung.org/',
+    'wss://ws7.blitzortung.org/',
+    'wss://ws8.blitzortung.org/'
+];
+
+const recentStrikeKeys = new Map();
+const upstreamState = new Map();
+let lastBroadcastAt = 0;
+let isShuttingDown = false;
+
+function extractStrikeTimestamp(strike) {
+    const candidates = [strike.timestamp, strike.time, strike.ts, strike.utc];
+    for (const candidate of candidates) {
+        if (!Number.isFinite(candidate)) continue;
+        if (candidate > 1e12) return candidate;
+        if (candidate > 1e9) return candidate * 1000;
+    }
+    return Date.now();
+}
+
+function strikeDedupeKey(lat, lon, timestamp) {
+    const sec = Math.floor(timestamp / 1000);
+    return `${Math.round(lat * 1000)}:${Math.round(lon * 1000)}:${sec}`;
+}
+
+function cleanupRecentStrikeKeys(now) {
+    const maxAge = 30000;
+    for (const [key, seenAt] of recentStrikeKeys.entries()) {
+        if (now - seenAt > maxAge) {
+            recentStrikeKeys.delete(key);
+        }
+    }
+}
+
+function broadcastStrike(lat, lon, timestamp) {
+    const key = strikeDedupeKey(lat, lon, timestamp);
+    const now = Date.now();
+    cleanupRecentStrikeKeys(now);
+
+    if (recentStrikeKeys.has(key)) {
+        return;
+    }
+    recentStrikeKeys.set(key, now);
+
+    addStrikeToCacheWithTimestamp(lat, lon, timestamp);
+    lastBroadcastAt = now;
+
+    const payload = JSON.stringify({ type: 'strike', lat, lon, timestamp });
+    wss.clients.forEach(client => {
+        if (client.readyState === WebSocket.OPEN) {
+            client.send(payload);
+        }
+    });
+}
+
+function scheduleReconnect(state, reason) {
+    if (isShuttingDown) return;
+
+    const jitterMs = Math.floor(Math.random() * 1000);
+    const waitMs = Math.min(state.backoffMs, BLITZ_MAX_RECONNECT_MS) + jitterMs;
+    state.backoffMs = Math.min(state.backoffMs * 2, BLITZ_MAX_RECONNECT_MS);
+
+    setTimeout(() => {
+        connectToBlitzortungEndpoint(state.url);
+    }, waitMs);
+
+    console.warn(`[Blitzortung] Reconnecting ${state.url} in ${waitMs}ms (${reason}).`);
+}
+
+function connectToBlitzortungEndpoint(url) {
+    let state = upstreamState.get(url);
+    if (!state) {
+        state = {
+            url,
+            ws: null,
+            backoffMs: BLITZ_BASE_RECONNECT_MS,
+            connectedAt: 0,
+            lastMessageAt: 0
+        };
+        upstreamState.set(url, state);
+    }
+
+    if (state.ws && (state.ws.readyState === WebSocket.OPEN || state.ws.readyState === WebSocket.CONNECTING)) {
+        return;
+    }
+
+    const wsBlitz = new WebSocket(url);
+    state.ws = wsBlitz;
 
     wsBlitz.on('open', () => {
-        console.log('[Blitzortung] Connected to live websocket feed.');
+        state.backoffMs = BLITZ_BASE_RECONNECT_MS;
+        state.connectedAt = Date.now();
+        state.lastMessageAt = Date.now();
+        console.log(`[Blitzortung] Connected to ${url}.`);
         wsBlitz.send(JSON.stringify({ a: 111 }));
     });
 
     wsBlitz.on('message', (data) => {
+        state.lastMessageAt = Date.now();
         try {
             const decodedText = decodeBlitzortung(data.toString('utf8'));
             const strike = JSON.parse(decodedText);
-            
-            if (strike && strike.lat && strike.lon) {
-                const now = Date.now();
-                addStrikeToCache(strike.lat, strike.lon);
-                
-                const payload = JSON.stringify({ type: 'strike', lat: strike.lat, lon: strike.lon, timestamp: now });
-                wss.clients.forEach(client => {
-                    if (client.readyState === WebSocket.OPEN) client.send(payload);
-                });
+
+            if (!strike || !Number.isFinite(strike.lat) || !Number.isFinite(strike.lon)) {
+                return;
             }
+
+            const timestamp = extractStrikeTimestamp(strike);
+            broadcastStrike(strike.lat, strike.lon, timestamp);
         } catch (err) {}
     });
 
-    wsBlitz.on('close', () => setTimeout(connectToBlitzortung, 5000));
-    wsBlitz.on('error', () => wsBlitz.close());
+    wsBlitz.on('close', () => {
+        if (state.ws === wsBlitz) {
+            state.ws = null;
+        }
+        scheduleReconnect(state, 'socket closed');
+    });
+
+    wsBlitz.on('error', () => {
+        wsBlitz.close();
+    });
 }
-connectToBlitzortung();
+
+BLITZ_ENDPOINTS.forEach(connectToBlitzortungEndpoint);
+
+setInterval(() => {
+    const now = Date.now();
+    upstreamState.forEach((state) => {
+        if (!state.ws || state.ws.readyState !== WebSocket.OPEN) return;
+        if (now - state.lastMessageAt > BLITZ_STALE_MS) {
+            console.warn(`[Blitzortung] Stale feed detected on ${state.url}; forcing reconnect.`);
+            state.ws.terminate();
+            state.ws = null;
+            scheduleReconnect(state, 'stale feed watchdog');
+        }
+    });
+}, 10000);
 
 wss.on('connection', (ws) => {
+    ws.isAlive = true;
+    ws.on('pong', () => {
+        ws.isAlive = true;
+    });
     ws.send(JSON.stringify({ type: 'history', data: strikeCache }));
 });
 
+const clientHeartbeat = setInterval(() => {
+    wss.clients.forEach((ws) => {
+        if (ws.isAlive === false) {
+            ws.terminate();
+            return;
+        }
+
+        ws.isAlive = false;
+        ws.ping();
+    });
+}, CLIENT_PING_INTERVAL_MS);
+
+wss.on('close', () => {
+    clearInterval(clientHeartbeat);
+});
+
 setInterval(() => {
-    console.log(`[Status] Active memory cache: ${tileCache.size} map tiles. Retained historical strikes: ${strikeCache.length}`);
+    const connectedUpstreams = Array.from(upstreamState.values()).filter(
+        state => state.ws && state.ws.readyState === WebSocket.OPEN
+    ).length;
+    const secondsSinceLastStrike = lastBroadcastAt ? Math.floor((Date.now() - lastBroadcastAt) / 1000) : 'n/a';
+    console.log(
+        `[Status] Upstreams: ${connectedUpstreams}/${BLITZ_ENDPOINTS.length}. Active clients: ${wss.clients.size}. ` +
+        `Tiles: ${tileCache.size}. Strikes: ${strikeCache.length}. Last strike: ${secondsSinceLastStrike}s ago.`
+    );
 }, 60000);
+
+function shutdownGracefully(signalName) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    console.log(`[Shutdown] Received ${signalName}. Saving state and closing sockets.`);
+    saveStrikesToDisk();
+
+    upstreamState.forEach((state) => {
+        if (state.ws) {
+            state.ws.terminate();
+            state.ws = null;
+        }
+    });
+
+    wss.clients.forEach((client) => {
+        try {
+            client.close();
+        } catch (err) {}
+    });
+
+    server.close(() => process.exit(0));
+    setTimeout(() => process.exit(0), 2000);
+}
+
+process.on('SIGINT', () => shutdownGracefully('SIGINT'));
+process.on('SIGTERM', () => shutdownGracefully('SIGTERM'));
 
 server.listen(3000, () => {
     console.log('Weather dashboard serving on port 3000');
