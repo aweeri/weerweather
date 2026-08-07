@@ -255,6 +255,7 @@
             attributionControl: false,
             doubleClickZoom: false,
             touchZoom: true,
+            fadeAnimation: false,
             zoomSnap: 0.01,
             zoomDelta: 0.25,
             doubleTapDragZoom: 'center',
@@ -268,9 +269,14 @@
         const mapContainer = map.getContainer();
         let lastTapTime = 0;
         let activeDoubleTapGesture = null;
+        let doubleTapMoveRaf = null;
 
         function resetDoubleTapGesture() {
             activeDoubleTapGesture = null;
+            if (doubleTapMoveRaf !== null) {
+                cancelAnimationFrame(doubleTapMoveRaf);
+                doubleTapMoveRaf = null;
+            }
         }
 
         mapContainer.addEventListener('touchstart', (event) => {
@@ -295,6 +301,7 @@
                 center: map.containerPointToLatLng(map.getSize().divideBy(2))
             };
             map.stop();
+            map._moveStart(true, false);
             map.dragging.disable();
             event.preventDefault();
             event.stopPropagation();
@@ -312,7 +319,13 @@
             const clampedZoom = map._limitZoom(targetZoom);
 
             if (Number.isFinite(clampedZoom)) {
-                map.setView(activeDoubleTapGesture.center, clampedZoom, { animate: false });
+                if (doubleTapMoveRaf !== null) {
+                    cancelAnimationFrame(doubleTapMoveRaf);
+                }
+                doubleTapMoveRaf = requestAnimationFrame(() => {
+                    doubleTapMoveRaf = null;
+                    map._move(activeDoubleTapGesture.center, clampedZoom, { pinch: true, round: false });
+                });
             }
 
             event.preventDefault();
@@ -320,15 +333,24 @@
         }, { passive: false });
 
         mapContainer.addEventListener('touchend', () => {
+            if (activeDoubleTapGesture) {
+                map._moveEnd(true);
+            }
             resetDoubleTapGesture();
             map.dragging.enable();
         }, { passive: false });
         mapContainer.addEventListener('touchcancel', () => {
+            if (activeDoubleTapGesture) {
+                map._moveEnd(true);
+            }
             resetDoubleTapGesture();
             map.dragging.enable();
         }, { passive: false });
 
-        let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+        let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            keepBuffer: 8,
+            updateWhenZooming: false
+        }).addTo(map);
         const userLocationLayer = L.layerGroup().addTo(map);
         let userLocationMarker = null;
         let userAccuracyRing = null;
@@ -489,7 +511,7 @@
                 this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
                 this._canvas.style.pointerEvents = 'none';
                 map.getPanes().overlayPane.appendChild(this._canvas);
-                map.on('zoom move resize', this._update, this);
+                map.on('move zoom resize', this._update, this);
                 this._update();
                 
                 this._animating = true;
@@ -503,13 +525,13 @@
             onRemove: function(map) {
                 this._animating = false;
                 L.DomUtil.remove(this._canvas);
-                map.off('zoom move resize', this._update, this);
+                map.off('move zoom resize', this._update, this);
             },
             _update: function() {
                 if (!this._map) return;
                 const size = this._map.getSize();
-                this._canvas.width = size.x;
-                this._canvas.height = size.y;
+                if (this._canvas.width !== size.x) this._canvas.width = size.x;
+                if (this._canvas.height !== size.y) this._canvas.height = size.y;
                 L.DomUtil.setPosition(this._canvas, this._map.containerPointToLayerPoint([0, 0]));
             },
             redraw: function() {
@@ -836,7 +858,15 @@
 
                 if (!radarLayers[activeFrame.path]) {
                     const url = `/api/radar/tile${activeFrame.path}/512/{z}/{x}/{y}/2/1_1.png`;
-                    radarLayers[activeFrame.path] = L.tileLayer(url, { opacity: 0, maxNativeZoom: 3, transparent: true, className: 'pixelated-layer', zIndex: 10 }).addTo(map);
+                    radarLayers[activeFrame.path] = L.tileLayer(url, {
+                        opacity: 0,
+                        maxNativeZoom: 3,
+                        transparent: true,
+                        className: 'pixelated-layer',
+                        zIndex: 10,
+                        keepBuffer: 8,
+                        updateWhenZooming: false
+                    }).addTo(map);
                 }
 
                 if (currentFramePath && currentFramePath !== activeFrame.path && radarLayers[currentFramePath]) {
