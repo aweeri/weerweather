@@ -69,8 +69,13 @@
             user-select: none;
         }
         #panel-tab:hover { color: var(--text-main); }
+        #control-panel.collapsed { width: auto; }
         .collapsed #panel-body { display: none; }
-        .collapsed #panel-tab { border-bottom: none; }
+        .collapsed #panel-tab {
+            border-bottom: none;
+            text-align: center;
+            padding: 6px 10px;
+        }
 
         .panel-section { padding: 12px; border-bottom: 1px solid var(--border-color); }
         .panel-section:last-child { border-bottom: none; }
@@ -154,8 +159,8 @@
     <div id="logo"><span class="ghost">A</span>weerWeather</div>
     <div id="map"></div>
 
-    <div id="control-panel">
-        <div id="panel-tab">[ – ] HIDE</div>
+    <div id="control-panel" class="collapsed">
+        <div id="panel-tab">[ + ] SHOW</div>
         
         <div id="panel-body">
             <div class="panel-section">
@@ -191,21 +196,21 @@
                 <div class="control-row">
                     <span>Day / Night</span>
                     <label class="switch">
-                        <input type="checkbox" id="layer-terminator">
+                        <input type="checkbox" id="layer-terminator" checked>
                         <span class="slider"></span>
                     </label>
                 </div>
                 <div class="control-row">
                     <span>Audio Ticks</span>
                     <label class="switch">
-                        <input type="checkbox" id="toggle-sound">
+                        <input type="checkbox" id="toggle-sound" checked>
                         <span class="slider"></span>
                     </label>
                 </div>
                 <div class="control-row">
                     <span>Light Mode</span>
                     <label class="switch">
-                        <input type="checkbox" id="toggle-theme">
+                        <input type="checkbox" id="toggle-theme" checked>
                         <span class="slider"></span>
                     </label>
                 </div>
@@ -356,13 +361,33 @@
         let userAccuracyRing = null;
         let hasCenteredOnUser = false;
 
-        const savedSettings = ['layer-radar', 'layer-lightning', 'layer-vectors', 'layer-terminator', 'toggle-sound', 'toggle-theme'];
-        savedSettings.forEach(id => {
+        const defaultSettings = {
+            'layer-radar': true,
+            'layer-lightning': true,
+            'layer-vectors': false,
+            'layer-terminator': true,
+            'toggle-sound': true,
+            'toggle-theme': true
+        };
+        const settingIds = Object.keys(defaultSettings);
+
+        settingIds.forEach(id => {
             const el = document.getElementById(id);
             const val = localStorage.getItem(id);
-            if (val !== null) el.checked = val === 'true';
+            if (val !== null) {
+                el.checked = val === 'true';
+            } else {
+                el.checked = defaultSettings[id];
+            }
             el.addEventListener('change', () => localStorage.setItem(id, el.checked));
         });
+
+        const panel = document.getElementById('control-panel');
+        const panelTab = document.getElementById('panel-tab');
+        const savedPanelCollapsed = localStorage.getItem('control-panel-collapsed');
+        const isPanelCollapsed = savedPanelCollapsed === null ? true : savedPanelCollapsed === 'true';
+        panel.classList.toggle('collapsed', isPanelCollapsed);
+        panelTab.innerText = isPanelCollapsed ? '[ + ] SHOW' : '[ – ] HIDE';
 
         const savedAge = localStorage.getItem('lightning-age-slider');
         if (savedAge !== null) {
@@ -386,10 +411,11 @@
             }
         });
 
-        document.getElementById('panel-tab').addEventListener('click', (e) => {
-            const panel = document.getElementById('control-panel');
+        panelTab.addEventListener('click', (e) => {
             panel.classList.toggle('collapsed');
-            e.target.innerText = panel.classList.contains('collapsed') ? '[ + ] SHOW' : '[ – ] HIDE';
+            const collapsed = panel.classList.contains('collapsed');
+            localStorage.setItem('control-panel-collapsed', collapsed);
+            e.target.innerText = collapsed ? '[ + ] SHOW' : '[ – ] HIDE';
         });
 
         function updateUserLocation(lat, lon, accuracyMeters) {
