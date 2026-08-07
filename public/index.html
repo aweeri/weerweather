@@ -254,6 +254,7 @@
             zoomControl: false,
             attributionControl: false,
             doubleClickZoom: false,
+            touchZoom: 'center',
             zoomSnap: 0.01,
             zoomDelta: 0.25,
             doubleTapDragZoom: 'center',
@@ -290,7 +291,8 @@
             activeDoubleTapGesture = {
                 startY: touch.clientY,
                 startZoom: map.getZoom(),
-                center: map.getCenter()
+                // Freeze a center anchor for the full gesture to avoid drift.
+                center: map.containerPointToLatLng(map.getSize().divideBy(2))
             };
             map.stop();
             event.preventDefault();
