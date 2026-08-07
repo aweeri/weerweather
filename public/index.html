@@ -254,7 +254,7 @@
             zoomControl: false,
             attributionControl: false,
             doubleClickZoom: false,
-            touchZoom: 'center',
+            touchZoom: true,
             zoomSnap: 0.01,
             zoomDelta: 0.25,
             doubleTapDragZoom: 'center',
@@ -295,7 +295,9 @@
                 center: map.containerPointToLatLng(map.getSize().divideBy(2))
             };
             map.stop();
+            map.dragging.disable();
             event.preventDefault();
+            event.stopPropagation();
         }, { passive: false });
 
         mapContainer.addEventListener('touchmove', (event) => {
@@ -314,10 +316,17 @@
             }
 
             event.preventDefault();
+            event.stopPropagation();
         }, { passive: false });
 
-        mapContainer.addEventListener('touchend', resetDoubleTapGesture, { passive: false });
-        mapContainer.addEventListener('touchcancel', resetDoubleTapGesture, { passive: false });
+        mapContainer.addEventListener('touchend', () => {
+            resetDoubleTapGesture();
+            map.dragging.enable();
+        }, { passive: false });
+        mapContainer.addEventListener('touchcancel', () => {
+            resetDoubleTapGesture();
+            map.dragging.enable();
+        }, { passive: false });
 
         let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
         const userLocationLayer = L.layerGroup().addTo(map);
