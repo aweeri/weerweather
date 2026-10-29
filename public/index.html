@@ -230,7 +230,7 @@
                 <div style="color: var(--text-mute); line-height: 1.4; font-size: 9px;">
                     STRIKES: BLITZORTUNG.ORG<br>
                     RADAR: RAINVIEWER API<br>
-                    MAP: © OPENSTREETMAP / CARTO
+                    MAP: © ESRI, HERE, GARMIN, OPENSTREETMAP
                 </div>
             </div>
         </div>
@@ -352,10 +352,41 @@
             map.dragging.enable();
         }, { passive: false });
 
-        let baseLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        // Keyless raster basemaps. CARTO's free basemaps now require an API key
+        // and otherwise return "API KEY REQUIRED" placeholder tiles, so use
+        // Esri's Canvas basemaps instead (no key, no signup).
+        const BASE_MAPS = {
+            dark: {
+                base: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+                labels: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}'
+            },
+            light: {
+                base: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Base/MapServer/tile/{z}/{y}/{x}',
+                labels: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Light_Gray_Reference/MapServer/tile/{z}/{y}/{x}'
+            }
+        };
+
+        const baseTileOptions = {
             keepBuffer: 8,
-            updateWhenZooming: false
-        }).addTo(map);
+            updateWhenZooming: false,
+            maxNativeZoom: 16,
+            maxZoom: 18
+        };
+
+        let baseLayer = L.tileLayer(BASE_MAPS.dark.base, baseTileOptions).addTo(map);
+
+        // Esri's Canvas style keeps place labels in a separate transparent
+        // layer, drawn above the basemap and above the radar tiles.
+        let labelLayer = L.tileLayer(BASE_MAPS.dark.labels, Object.assign({}, baseTileOptions, {
+            zIndex: 20,
+            pane: 'tilePane'
+        })).addTo(map);
+
+        function setBaseMap(theme) {
+            const config = BASE_MAPS[theme] || BASE_MAPS.dark;
+            baseLayer.setUrl(config.base);
+            labelLayer.setUrl(config.labels);
+        }
         const userLocationLayer = L.layerGroup().addTo(map);
         let userLocationMarker = null;
         let userAccuracyRing = null;
@@ -398,16 +429,16 @@
 
         if (document.getElementById('toggle-theme').checked) {
             document.documentElement.classList.add('light-mode');
-            baseLayer.setUrl('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png');
+            setBaseMap('light');
         }
 
         document.getElementById('toggle-theme').addEventListener('change', (e) => {
             if (e.target.checked) {
                 document.documentElement.classList.add('light-mode');
-                baseLayer.setUrl('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png');
+                setBaseMap('light');
             } else {
                 document.documentElement.classList.remove('light-mode');
-                baseLayer.setUrl('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png');
+                setBaseMap('dark');
             }
         });
 
