@@ -861,6 +861,9 @@
         window.isPlaying = false;
         
         const radarLayers = {};
+        // Highest zoom RainViewer's 512px tiles actually serve; z8+ returns a
+        // single placeholder tile for every coordinate.
+        const RADAR_MAX_NATIVE_ZOOM = 7;
         let currentFramePath = null;
         const uniTimeline = document.getElementById('uni-timeline');
         const uniTimestamp = document.getElementById('uni-timestamp');
@@ -917,11 +920,14 @@
                     const url = `/api/radar/tile${activeFrame.path}/512/{z}/{x}/{y}/2/1_1.png`;
                     radarLayers[activeFrame.path] = L.tileLayer(url, {
                         opacity: 0,
-                        maxNativeZoom: 3,
+                        // Capping this at 3 made Leaflet upscale the whole tile
+                        // container ~32000x when zoomed in, which stalls compositing
+                        // and blurs the radar.
+                        maxNativeZoom: RADAR_MAX_NATIVE_ZOOM,
                         transparent: true,
                         className: 'pixelated-layer',
                         zIndex: 10,
-                        keepBuffer: 8,
+                        keepBuffer: 2,
                         updateWhenZooming: false
                     }).addTo(map);
                 }
