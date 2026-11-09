@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>weerweather</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
     <style>
         :root {
             --bg-panel: #000000;
@@ -31,6 +32,8 @@
         body, html { margin: 0; padding: 0; height: 100%; background: var(--bg-panel); font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; overflow: hidden; }
         #map { height: 100vh; width: 100vw; touch-action: none; }
         .leaflet-container { background: var(--bg-panel); touch-action: none; }
+        /* Keep the vector basemap under Leaflet's radar tile layer (zIndex 10). */
+        .leaflet-gl-layer { z-index: 0; }
         
         #logo {
             position: absolute;
@@ -230,7 +233,7 @@
                 <div style="color: var(--text-mute); line-height: 1.4; font-size: 9px;">
                     STRIKES: BLITZORTUNG.ORG<br>
                     RADAR: RAINVIEWER API<br>
-                    MAP: © ESRI, HERE, GARMIN, OPENSTREETMAP
+                    MAP: © OPENSTREETMAP, VERSATILES
                 </div>
             </div>
         </div>
@@ -249,6 +252,8 @@
     </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/@maplibre/maplibre-gl-leaflet@0.1.4/leaflet-maplibre-gl.js"></script>
     <script src="https://unpkg.com/@joergdietrich/leaflet.terminator"></script>
     <script>
         if (!L.Map || !L.Map.mergeOptions) {
@@ -352,10 +357,23 @@
             map.dragging.enable();
         }, { passive: false });
 
-        // Keyless raster basemaps. CARTO's free basemaps now require an API key
-        // and otherwise return "API KEY REQUIRED" placeholder tiles, so use
-        // Esri's Canvas basemaps instead (no key, no signup).
+        // Vector basemap, same stack Home Assistant uses for its map
+        // (MapLibre GL + OpenStreetMap Vector Tiles from VersaTiles, free and
+        // keyless). Rendered as a Leaflet layer so the radar, lightning and
+        // terminator layers keep working unchanged.
         const BASE_MAPS = {
+            dark: 'https://tiles.versatiles.org/assets/styles/muted-dark/style.json',
+            light: 'https://tiles.versatiles.org/assets/styles/muted/style.json'
+        };
+
+        // MapLibre GL JS v4 needs WebGL2; keep the old raster basemap for
+        // devices (mostly old tablets) that only have WebGL1.
+        const vectorSupported = (() => {
+            try { return !!document.createElement('canvas').getContext('webgl2'); }
+            catch (e) { return false; }
+        })();
+
+        const RASTER_FALLBACK = {
             dark: {
                 base: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
                 labels: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}'
@@ -373,19 +391,33 @@
             maxZoom: 18
         };
 
-        let baseLayer = L.tileLayer(BASE_MAPS.dark.base, baseTileOptions).addTo(map);
+        let baseLayer;
+        let labelLayer = null;
 
-        // Esri's Canvas style keeps place labels in a separate transparent
-        // layer, drawn above the basemap and above the radar tiles.
-        let labelLayer = L.tileLayer(BASE_MAPS.dark.labels, Object.assign({}, baseTileOptions, {
-            zIndex: 20,
-            pane: 'tilePane'
-        })).addTo(map);
+        if (vectorSupported) {
+            baseLayer = L.maplibreGL({
+                style: BASE_MAPS.dark,
+                pane: 'tilePane',
+                attributionControl: false
+            }).addTo(map);
+        } else {
+            baseLayer = L.tileLayer(RASTER_FALLBACK.dark.base, baseTileOptions).addTo(map);
+            labelLayer = L.tileLayer(RASTER_FALLBACK.dark.labels, Object.assign({}, baseTileOptions, {
+                zIndex: 20,
+                pane: 'tilePane'
+            })).addTo(map);
+        }
 
         function setBaseMap(theme) {
-            const config = BASE_MAPS[theme] || BASE_MAPS.dark;
-            baseLayer.setUrl(config.base);
-            labelLayer.setUrl(config.labels);
+            if (labelLayer) {
+                const config = RASTER_FALLBACK[theme] || RASTER_FALLBACK.dark;
+                baseLayer.setUrl(config.base);
+                labelLayer.setUrl(config.labels);
+                return;
+            }
+            const style = BASE_MAPS[theme] || BASE_MAPS.dark;
+            const gl = baseLayer.getMaplibreMap();
+            if (gl) gl.setStyle(style);
         }
         const userLocationLayer = L.layerGroup().addTo(map);
         let userLocationMarker = null;
