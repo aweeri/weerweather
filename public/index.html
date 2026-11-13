@@ -823,7 +823,90 @@
         });
 
         // Terminator Layer (Day / Night)
-        const terminatorLayer = L.terminator({ time: window.unifiedTimeMs, fillOpacity: 0.3, interactive: false });
+        //
+        // L.terminator is an L.Polygon, so its ring is drawn by Leaflet's SVG
+        // renderer, which clips the path to the viewport and then GPU-scales
+        // that clipped shape for the ~250ms zoom animation. The night area
+        // therefore shows up as a hard-edged rectangle while zooming and only
+        // snaps back to its real curve on zoomend/moveend (same for a pan).
+        // Drawing the ring ourselves in screen space keeps the shadow correct
+        // on every frame of a pan/zoom, because nothing is scaled.
+        const TerminatorCanvasLayer = L.Layer.extend({
+            options: { fillOpacity: 0.3 },
+
+            initialize: function (options) {
+                L.Util.setOptions(this, options);
+                this._terminator = L.terminator({
+                    time: options.time || Date.now(),
+                    interactive: false
+                });
+            },
+
+            onAdd: function (map) {
+                this._map = map;
+                this._canvas = L.DomUtil.create('canvas', 'leaflet-zoom-animated');
+                this._canvas.style.pointerEvents = 'none';
+                map.getPanes().overlayPane.appendChild(this._canvas);
+                map.on('move zoom resize', this._draw, this);
+                map.on('zoomanim', this._onZoomAnim, this);
+                this._draw();
+            },
+
+            onRemove: function (map) {
+                L.DomUtil.remove(this._canvas);
+                this._canvas = null;
+                map.off('move zoom resize', this._draw, this);
+                map.off('zoomanim', this._onZoomAnim, this);
+            },
+
+            setTime: function (date) {
+                this._terminator.setTime(date);
+                this._draw();
+            },
+
+            _onZoomAnim: function () {
+                // 'zoomanim' fires just before Leaflet applies the new
+                // center/zoom, so redraw on the next frame to land on the
+                // right projection. 'zoom'/'move' do not fire while a zoom
+                // animation is running, hence this extra hook.
+                requestAnimationFrame(() => this._draw());
+            },
+
+            _draw: function () {
+                if (!this._map || !this._canvas) return;
+                const map = this._map;
+                const ring = this._terminator.getLatLngs()[0];
+                if (!ring || !ring.length) return;
+
+                const size = map.getSize();
+                const dpr = window.devicePixelRatio || 1;
+                const w = Math.round(size.x * dpr);
+                const h = Math.round(size.y * dpr);
+                if (this._canvas.width !== w) this._canvas.width = w;
+                if (this._canvas.height !== h) this._canvas.height = h;
+                this._canvas.style.width = size.x + 'px';
+                this._canvas.style.height = size.y + 'px';
+                L.DomUtil.setPosition(this._canvas, map.containerPointToLayerPoint([0, 0]));
+
+                const ctx = this._canvas.getContext('2d');
+                ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+                ctx.clearRect(0, 0, size.x, size.y);
+                ctx.beginPath();
+                for (let i = 0; i < ring.length; i++) {
+                    const p = map.latLngToContainerPoint(ring[i]);
+                    if (i === 0) ctx.moveTo(p.x, p.y);
+                    else ctx.lineTo(p.x, p.y);
+                }
+                ctx.closePath();
+                ctx.fillStyle = `rgba(0, 0, 0, ${this.options.fillOpacity})`;
+                ctx.fill();
+            }
+        });
+
+        const terminatorLayer = new TerminatorCanvasLayer({
+            time: window.unifiedTimeMs,
+            fillOpacity: 0.3
+        });
         if (document.getElementById('layer-terminator').checked) {
             terminatorLayer.addTo(map);
         }
